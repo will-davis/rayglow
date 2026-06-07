@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# uv
+# (uv.lock IS tracked; only the venv is ignored)
+
+# Renderer artifacts
+*.gif
+/tmp/
+
+# Trash from the sshfs/NFS mount
+.Trash-*/
+.Trash-1000/
+
+# Editor / OS
+*.swp
+.DS_Store
