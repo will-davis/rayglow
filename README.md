@@ -96,17 +96,19 @@ The Pi runs the same git checkout, installed editable into its prebuilt matrix v
 ```fish
 # on the Pi, first time:
 git clone git@github.com:will-davis/rayglow ~/rayglow
-sudo ~/rgbvenv/bin/pip install -e ~/rayglow      # makes `rayglow` importable under sudo
+uv pip install --python ~/rgbvenv/bin/python -e ~/rayglow   # makes `rayglow` importable
 # thereafter:
 cd ~/rayglow && git pull
 ```
 
-`rgbvenv` is the venv where hzeller's `rgbmatrix` is already built (it only compiles on
-the Pi — that's why it is *not* a dependency in `pyproject.toml`). Editable install
-(not `PYTHONPATH`) because `sudo` scrubs the environment but respects the installed
-package; hardware mode keeps root for GPIO and to re-read shader files on hot reload, so
-the clone must live somewhere root can read (e.g. under `~`). The sshfs/NFS mount of the
-Pi is now just a convenience for live-editing shaders — not the sync mechanism.
+`rgbvenv` is the uv-managed venv where hzeller's `rgbmatrix` is already built (it only
+compiles on the Pi — that's why it is *not* a dependency in `pyproject.toml`). The
+install goes through `uv pip --python <venv>` because that venv has no `pip` of its own.
+Editable install (not `PYTHONPATH`) because `sudo` scrubs the environment but respects
+the installed package; hardware mode keeps root for GPIO and to re-read shader files on
+hot reload, so the clone must live somewhere root can read (e.g. under `~`). The
+sshfs/NFS mount of the Pi is now just a convenience for live-editing shaders — not the
+sync mechanism.
 
 ## Status
 

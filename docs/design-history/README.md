@@ -8,7 +8,9 @@ current docs win.
   from-scratch MilkDrop port. Still the best reference for the MilkDrop
   reverse-engineering and the "why from scratch" rationale; its packet spec is the v0
   ancestor of today's v1.
-- **`BUILD-HISTORY.md`** — _(to be added)_ a knowledge-export brain-dump from the Pi-side
-  build agent: decision log, dead ends, hardware/environment quirks, calibration
-  constants, load-bearing oddities, and a rough timeline. Captures what lived only in a
-  long agent context, so it isn't lost when that context is.
+- **`BUILD-HISTORY.md`** — a knowledge-export brain-dump from the Pi-side build agent:
+  decision log, dead ends, hardware/environment quirks (the panel-1 artifact hunt, the
+  PWM solder mod, V3D/EGL behavior), calibration constants, load-bearing oddities, and a
+  rough timeline. Captures what lived only in a long agent context, so it isn't lost when
+  that context is. Written against the pre-restructure layout — see its header banner for
+  the path remap.

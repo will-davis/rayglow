@@ -46,10 +46,11 @@ are wire/shader-facing names, not package names — don't rename them.
   path) so headless/dry-run never touches it — keep those imports lazy.
 - **Import direction:** the live path (`render`) and `legacy` both import *up* into
   `feed`; nothing imports *into* `legacy`. Keep `feed` dependency-free of the renderers.
-- **Deploy is editable-install, not PYTHONPATH:** `sudo pip install -e ~/rayglow` into
-  `rgbvenv`. `sudo` scrubs env (so PYTHONPATH would need `-E`) but respects the installed
-  package. Hardware mode keeps root for GPIO + to re-read `.glsl` on hot reload, so the
-  clone must live where root can read it (under `~`).
+- **Deploy is editable-install, not PYTHONPATH:** `uv pip install --python
+  ~/rgbvenv/bin/python -e ~/rayglow` (rgbvenv is uv-managed and has no `pip` of its own).
+  `sudo` scrubs env (so PYTHONPATH would need `-E`) but respects the installed package.
+  Hardware mode keeps root for GPIO + to re-read `.glsl` on hot reload, so the clone must
+  live where root can read it (under `~`).
 
 ## Working across the two machines
 
