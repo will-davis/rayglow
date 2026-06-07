@@ -6,11 +6,12 @@ draw audio geometry -> composite (gamma, outside the feedback loop).
 """
 import time
 
-from . import config, draw
-from .features import FeatureState
+from . import draw
+from ..feed import config
+from ..feed.features import FeatureState
 from .framebuffer import FeedbackBuffer
-from .presets import DEFAULTS, PRESETS
-from .receiver import Receiver
+from .milkpresets import DEFAULTS, PRESETS
+from ..feed.receiver import Receiver
 from .warp import WarpCache
 
 

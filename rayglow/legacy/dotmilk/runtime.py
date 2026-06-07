@@ -12,7 +12,7 @@ Implements MilkDrop's variable semantics (milkdropfs.cpp:483-674):
 import numpy as np
 import numpy.fft  # noqa: F401 — eager-load: spectrum() must not import post-priv-drop
 
-from .. import config
+from ...feed import config
 from ..warp import ASPECT_X, ASPECT_Y, INV_ASPECT_X, INV_ASPECT_Y, NX, NY, RAD
 from . import waves
 from .custom import CustomShape, CustomWave

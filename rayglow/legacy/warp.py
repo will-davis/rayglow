@@ -18,7 +18,7 @@ import math
 
 import numpy as np
 
-from . import config
+from ..feed import config
 
 W, H = config.WIDTH, config.HEIGHT
 

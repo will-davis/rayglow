@@ -23,7 +23,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
-from .. import config
+from ...feed import config
 from ..engine import Engine
 
 SCALE = 2          # thumbnail upscale

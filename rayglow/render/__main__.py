@@ -40,7 +40,7 @@ import time
 
 import numpy as np
 
-from milk import config  # geometry/gamma source of truth (sibling package)
+from ..feed import config  # geometry/gamma source of truth (shared feed pkg)
 
 from .egl import GLContext, GLError
 from .pipeline import ShaderToy
@@ -64,7 +64,7 @@ class AudioFeed:
     Synth fallback keeps the texture animating when nothing is playing."""
 
     def __init__(self, channels, allow_listen):
-        from milk.features import FeatureState
+        from ..feed.features import FeatureState
         self.features = FeatureState()
         self.channels = channels
         self.allow_listen = allow_listen
@@ -77,7 +77,7 @@ class AudioFeed:
         if not self._announced:
             self._announced = True
             if self.allow_listen:
-                from milk.receiver import Receiver
+                from ..feed.receiver import Receiver
                 self.receiver = Receiver()
                 print("audio: listening on UDP")
             else:

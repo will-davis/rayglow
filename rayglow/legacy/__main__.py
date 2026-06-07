@@ -19,9 +19,9 @@ import time
 
 import numpy as np
 
-from . import config
+from ..feed import config
 from .engine import Engine
-from .presets import PRESETS
+from .milkpresets import PRESETS
 
 
 def pin_to_core(core):

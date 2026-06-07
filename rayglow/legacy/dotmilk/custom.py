@@ -26,7 +26,7 @@ import math
 import cv2
 import numpy as np
 
-from .. import config
+from ...feed import config
 from ..warp import ASPECT_Y, INV_ASPECT_X, INV_ASPECT_Y
 from .eel import EelNS, transpile
 

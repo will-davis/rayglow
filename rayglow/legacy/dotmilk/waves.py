@@ -14,7 +14,7 @@ import math
 import cv2
 import numpy as np
 
-from .. import config
+from ...feed import config
 from ..warp import ASPECT_X, ASPECT_Y
 
 W, H = config.WIDTH, config.HEIGHT

@@ -6,7 +6,7 @@ inside the feedback loop would compound every frame and crush the image.
 import cv2
 import numpy as np
 
-from . import config
+from ..feed import config
 
 BORDER = {
     "constant": cv2.BORDER_CONSTANT,   # trails fade off-edge to black (default)
