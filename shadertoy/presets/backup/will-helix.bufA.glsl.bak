@@ -1,0 +1,81 @@
+// Buffer A: a time integrator.  One texel of state — a "phase clock" whose
+// VELOCITY (not position) is what the music steers.
+//
+// The wall you hit: with sin(iTime * speed), speed multiplies *all time
+// accumulated so far*, so nudging it snaps the phase to a new position.
+// The fix is to integrate instead:
+//
+//     forward Euler:  theta(next) = theta + v * dt
+//
+// Now v can swing wildly and theta just bends its slope — motion stays
+// continuous because position only ever changes by v*dt per frame.
+//
+// State texel layout: .x = theta (integrated phase), .y = v (current rate),
+// .z = amp (smoothed wave amplitude, read by the image pass).
+
+// iChannel0: self
+// iChannel1: milk
+
+// ---- knobs to experiment with -------------------------------------------
+#define BASE_RATE  0.4   // idle speed when the music is quiet
+#define BOOST      1.6   // how much extra speed a strong bass adds
+#define LAG        3.0   // 1/seconds: how fast v chases its target
+                         // (low = heavy flywheel, high = twitchy)
+#define AMP_QUIET  0.38  // wave amplitude (uv units) when the music is quiet
+#define AMP_LOUD   1.0   // amplitude at full bass
+#define AMP_LAG    8.0   // amplitude's own chase rate — snappier than v so
+                         // hits visibly swell, but still no strobing
+
+void mainImage(out vec4 o, in vec2 I) {
+    // State lives in texel (0,0); every other pixel of this buffer is
+    // unused, so write black and bail (standard Shadertoy sim idiom).
+    if (ivec2(I) != ivec2(0)) { o = vec4(0.0); return; }
+
+    vec4 state  = texelFetch(iChannel0, ivec2(0), 0);  // self = last frame
+    float theta = state.x;
+    float v     = state.y;
+
+    float amp   = state.z;
+
+    if (iFrame == 0) {                 // buffers start zeroed; seed once
+        o = vec4(0.0, BASE_RATE, AMP_QUIET, 1.0);
+        return;
+    }
+
+    // Where the rate WANTS to be, from the music.  This is the milk
+    // channel, not the audio spectrum: bass here is auto-gained by the
+    // sender (divided by its own running average), so the units are
+    // "times the typical level for this song" — 1.0 = ordinary, <1 =
+    // breakdown/quiet, 2-3 = a real hit.  The spectrum row's dB clamp
+    // (everything > -30dB -> 1.0) is what made the old read binary.
+    float bass   = texelFetch(iChannel1, ivec2(4, 0), 0).x;
+    float target = BASE_RATE + BOOST * smoothstep(1.0, 2.2, bass);
+
+    // First-order lag — forward Euler again, this time on the rate itself:
+    // dv/dt = LAG * (target - v).  Smooths the jittery per-frame bass into
+    // a flywheel-like speed.  min() keeps a slow frame from overshooting.
+    float dt = iTimeDelta;
+    v += (target - v) * min(1.0, LAG * dt);
+
+    // Amplitude: same lag pattern, different state slot.  Note this one is
+    // NOT an integrator chain like theta — amp just *tracks* the bass with
+    // smoothing.  Position-like things accumulate; size-like things track.
+    // .y of the same texel = bass_att, the sender's smoothed bass — better
+    // for a size that should swell with sections rather than punch per-kick
+    // (swap .x in here if you want amp to hit with every kick instead).
+    float bass_att   = texelFetch(iChannel1, ivec2(0, 0), 0).y;
+    float amp_target = mix(AMP_QUIET, AMP_LOUD, smoothstep(0.8, 1.8, bass_att));
+    amp += (amp_target - amp) * min(1.0, AMP_LAG * dt);
+
+    // The integrator itself: velocity in, position out.
+    theta += v * dt;
+
+    // Precision housekeeping for an always-on panel: float32 sin() gets
+    // grainy once theta reaches the thousands.  All line speeds in the
+    // image pass are multiples of 0.1, so every sin(theta * speed) repeats
+    // exactly every 2*pi/0.1 — wrapping there is seamless.  (If you change
+    // the speeds to non-multiples of 0.1, this wrap will visibly snap.)
+    theta = mod(theta, 62.8318530718);
+
+    o = vec4(theta, v, amp, 1.0);
+}
