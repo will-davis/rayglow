@@ -1,6 +1,7 @@
 [project]
-name = "milk-pi"
+name = "rayglow-sender"
 version = "0.1.0"
+description = "RayGLow desktop feature daemon: capture audio, send features to the Pi."
 requires-python = ">=3.13"
 dependencies = [
     "numpy>=2.4.6",
