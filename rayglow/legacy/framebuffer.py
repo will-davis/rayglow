@@ -37,7 +37,7 @@ class FeedbackBuffer:
 
     def composite(self, gamma=None, brightness=1.0):
         """Tone-map to uint8 for the matrix (out = (buf*brightness) ** gamma,
-        the will-rpi-custom convention: <1 lifts faint trails, >1 deepens).
+        the repo's gamma convention: <1 lifts faint trails, >1 deepens).
         brightness carries .milk fGammaAdj.  Leaves the float buf untouched
         so feedback continues from linear values."""
         if gamma is None:

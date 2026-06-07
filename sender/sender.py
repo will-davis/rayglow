@@ -1,24 +1,25 @@
 #!/usr/bin/env python3
-"""Milk-Pi desktop feature daemon — the broadcast half of the LED-panel visualizer.
+"""RayGLow desktop feature daemon — the broadcast half of the LED-panel visualizer.
 
 Captures the PipeWire monitor of the default sink (whatever the desktop is
 playing), extracts per-frame audio features, and sends 564-byte v1 packets
 over unicast UDP at ~60 Hz to the Pi, which renders on a 256x32 HUB75 matrix.
 
-Receiving end (Pi 4B at 192.168.2.108, ~/rpi-rgb-led-matrix/will-rpi-custom/,
-mounted on this desktop at ~/local-mount/rpi4/):
-  - milk/receiver.py — the other half of the packet contract (accepts v0+v1,
-    nonblocking latest-wins drain)
-  - milk/features.py — FeatureState: latest packet values + synth fallback
-  - shadertoy/ — THE renderer: Shadertoy-compatible GLSL on the Pi's
+Receiving end (the `rayglow` package on the Pi 4B at 192.168.2.108; same git
+repo as this file — deployed via clone, not file-sync):
+  - rayglow.feed.receiver — the other half of the packet contract (accepts
+    v0+v1, nonblocking latest-wins drain)
+  - rayglow.feed.features — FeatureState: latest packet values + synth fallback
+  - rayglow.render — THE renderer: Shadertoy-dialect GLSL on the Pi's
     VideoCore VI GPU (headless EGL + GLES3).  This packet's features enter
     shaders as iChannel textures: 'milk' (8x1 float — bands + Pi-derived
-    signals; texel map in shadertoy/textures.py MilkChannel, live reference
-    card in shadertoy/presets/milk-verbose.glsl) and 'audio' (512x2
-    Shadertoy-style spectrum/waveform rebuilt from this packet's wave[128]).
-  - milk/ — the original MilkDrop-faithful NumPy/OpenCV renderer (this
-    project's first life; still runnable).  milk/fake_sender.py is the
-    music-free test harness speaking the same struct.
+    signals; texel map in rayglow/render/textures.py MilkChannel, live
+    reference card in rayglow/render/presets/milk-verbose.glsl) and 'audio'
+    (512x2 Shadertoy-style spectrum/waveform rebuilt from this packet's
+    wave[128]).
+  - rayglow.legacy — the original MilkDrop-faithful NumPy/OpenCV renderer
+    (this project's first life; still runnable).  rayglow/fake_sender.py is
+    the music-free test harness speaking the same struct.
 
 The analysis chain is a faithful port of MilkDrop3's (code/ in the MilkDrop3
 repo).  MilkDrop is no longer the renderer, but its auto-gain semantics —
@@ -43,9 +44,10 @@ that: 2048-sample FFT (23.4 Hz/bin), raw magnitudes (no equalize), bins
 In shaders it's milk-texture texel 4 (or band index 4 anywhere bands are
 ordered bass/mid/treb/vol/sub).
 
-Packet layout: PACKET_FMT below, mirrored in milk/receiver.py; full field
-table in README.md.  (project-milk-pi.md §5 documents the v0 ancestor and
-the retired milk renderer — kept as the historical record.)
+Packet layout: PACKET_FMT below, mirrored in rayglow/feed/receiver.py; full
+field table in this directory's README.md.  (docs/design-history/ holds the
+original project record: the MilkDrop reverse-engineering, the v0 ancestor,
+and the retired renderer.)
 
 Run:  uv run sender.py [--host 192.168.2.108] [--port 5005] [--source NAME]
       uv run sender.py --list-sources
@@ -61,9 +63,10 @@ import time
 
 import numpy as np
 
-# ---- packet v1 — contract mirrored in milk/receiver.py & fake_sender.py ------
-# v1 = the v0 layout (project-milk-pi.md §5) with (sub, sub_att) appended;
-# the receiver accepts both and substitutes sub=bass for v0 senders.
+# ---- packet v1 — contract mirrored in rayglow/feed/receiver.py + fake_sender.py
+# v1 = the v0 layout (docs/design-history/project-milk-pi.md §5) with
+# (sub, sub_att) appended; the receiver accepts both and substitutes sub=bass
+# for v0 senders.
 PACKET_FMT = "<IHHIf7f128f2f"   # magic, ver, flags, seq, t, 6 bands + vol, wave[128], sub, sub_att
 MAGIC = 0x4D494C4B              # "MILK"
 VERSION = 1

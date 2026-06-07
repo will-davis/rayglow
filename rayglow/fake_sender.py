@@ -1,17 +1,21 @@
 #!/usr/bin/env python3
-"""Fake feature sender — the executable spec for the future desktop daemon.
+"""Fake feature sender — music-free test harness for the renderer.
 
-Sends DRAFT v0 packets (project-milk-pi.md §5) over unicast UDP at ~60 Hz.
-Synthesizes band energies (bass = beat pulses at BPM, mid = wandering noise,
-treb = sweeps + sparkle), then runs MilkDrop's EXACT auto-gain
-(vis_milk2/plugin.cpp:8750) so the renderer sees imm_rel/avg_rel values that
-hover ~1.0 and spike on hits — same semantics real audio will produce.
+Sends 564-byte v1 packets (the same struct as sender/sender.py) over unicast
+UDP at ~60 Hz, but with *synthesized* features instead of real audio: band
+energies (bass = beat pulses at BPM, mid = wandering noise, treb = sweeps +
+sparkle, plus a punchy sub) run through MilkDrop's EXACT auto-gain
+(vis_milk2/plugin.cpp:8750), so the renderer sees imm_rel/avg_rel values that
+hover ~1.0 and spike on hits — same semantics real audio produces. Point the
+Pi at this when you want to exercise a shader with no music playing.
 
-Standalone on purpose (stdlib + numpy only, no package imports): this file
-gets copied to will-desktop and its synth section swapped for PipeWire
-capture + FFT.
+Standalone on purpose (stdlib + numpy only, no package imports) so it can run
+anywhere. It predates sender/sender.py and was the original executable spec
+for the wire format; the two now share the contract in
+rayglow/feed/receiver.py. (Historical packet record:
+docs/design-history/project-milk-pi.md §5, which describes the v0 ancestor.)
 
-Run:  ~/rgbvenv/bin/python milk/fake_sender.py [--host H] [--port P] [--bpm N]
+Run:  ~/rgbvenv/bin/python -m rayglow.fake_sender [--host H] [--port P] [--bpm N]
 """
 import argparse
 import math
