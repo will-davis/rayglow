@@ -15,6 +15,18 @@ WIDTH = COLS * CHAIN            # logical framebuffer width  (256)
 HEIGHT = ROWS * PARALLEL        # logical framebuffer height (32)
 
 # ----------------------------------------------------------------------------
+# rp2350b SPI link (Phase 5) — the "full display": two HUB75 chains, row A over
+# row B, driven by the RP2350 firmware instead of hzeller on this host.  The
+# rp2350b owns refresh timing; we just render and ship packed frames over SPI.
+# ----------------------------------------------------------------------------
+SPI_PARALLEL = 2                       # two parallel chains (rp2350b drives both)
+SPI_WIDTH = COLS * CHAIN               # 256 (same width as one chain)
+SPI_HEIGHT = ROWS * SPI_PARALLEL       # 64 (two stacked 32-row chains)
+SPI_BITDEPTH = 8                       # BCM planes — must equal firmware B (phase5_spi.rs)
+SPI_GAMMA = 2.1                        # firmware CIE LUT exponent (lut.rs) — packer owns gamma,
+                                       # so the render readback must stay LINEAR (gamma 1.0)
+
+# ----------------------------------------------------------------------------
 # Network (feature packets, project-milk-pi.md §5)
 # ----------------------------------------------------------------------------
 UDP_HOST = "0.0.0.0"            # listen on all interfaces
