@@ -12,11 +12,11 @@ panel. Write a shader, paste it in, watch it move to the music.
 ```
 will-desktop (PipeWire)                          raspberry pi 4b (192.168.2.108, IoT VLAN)
 ┌─────────────────────────────────────────┐      ┌────────────────────────────────────────┐
-│ music playback ─▶ sink monitor source   │      │ rayglow.feed.receiver  (latest-wins)   │
+│ music playback ─▶ sink monitor source  │      │ rayglow.feed.receiver  (latest-wins)   │
 │        │                                │ UDP  │        │                               │
-│ sender.py: capture ─▶ FFT ─▶ bands      │ ───▶ │ rayglow.feed.features (FeatureState +  │
+│ sender.py: capture ─▶ FFT ─▶ bands    │ ───▶│ rayglow.feed.features (FeatureState +  │
 │ + AutoGain + sub band + waveform        │ 5005 │        │           synth fallback)     │
-│ ─▶ 564-byte v1 packet @ ~60 Hz          │      │ rayglow.render  GLSL renderer          │
+│ ─▶ 564-byte v1 packet @ ~60 Hz         │      │ rayglow.render  GLSL renderer          │
 └─────────────────────────────────────────┘      │   (headless EGL + GLES3 on VideoCore)  │
                                                  │        │                               │
                                                  │ hzeller rpi-rgb-led-matrix             │
