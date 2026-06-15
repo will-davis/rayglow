@@ -12,10 +12,10 @@ https://github.com/user-attachments/assets/fb1bfaf4-e451-43c7-8cc3-830d7c186d91
 ```
 desktop (PipeWire)                 Raspberry Pi 5                       RP2350 + custom HAT
 ┌──────────────────────┐   UDP    ┌───────────────────────────┐  SPI   ┌───────────────────────┐
-│ music ▶ sink monitor │   5005   │ feed.receiver (latest-win)│ 64 KB  │ phase5_spi: PIO+DMA RX│
-│ sender.py: FFT ▶     │ ───────▶ │ render: GLSL ▶ pack       │ ─────▶ │ zero-CPU scan-out     │
-│ bands+AutoGain+sub   │  ~34KB/s │ (hub75.pack, LINEAR RGB)  │ frames │ ▶ HUB75 ▶ 256×64 wall │
-│ ▶ 564-B v1 @ ~60 Hz  │          │ headless EGL + GLES3      │        │ (2 chains × 4 panels) │
+│ music ▶ sink monitor│   5005   │ feed.receiver (latest-win)│ 64 KB  │ phase5_spi: PIO+DMA RX│
+│ sender.py: FFT ▶    │ ───────▶ │ render: GLSL ▶ pack     │ ─────▶│ zero-CPU scan-out     │
+│ bands+AutoGain+sub   │  ~34KB/s │ (hub75.pack, LINEAR RGB)  │ frames │ ▶HUB75 ▶ 256×64 wall│
+│ ▶ 564-B v1 @ ~60 Hz │          │ headless EGL + GLES3      │        │ (2 chains × 4 panels) │
 └──────────────────────┘          └───────────────────────────┘        └───────────────────────┘
         set $RAYGLOW_HOST ──────────────────▶ your Pi
 ```
