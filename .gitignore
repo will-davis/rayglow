@@ -5,6 +5,26 @@ __pycache__/
 .venv/
 venv/
 
+# Local machine config — real IPs/hostnames/paths (see LOCAL-SETUP.example.md)
+LOCAL-SETUP.md
+local.env
+.env
+
+# Rust firmware / host-tool build artifacts
+target/
+*.uf2
+*.rs.bk
+
+# KiCad backups / autosave / autorouter exchange / recovery
+*-backups/
+_autosave-*
+*.kicad_pcb-bak
+*.kicad_prl
+*.recovered.*
+*.dsn
+*.ses
+fp-info-cache
+
 # uv
 # (uv.lock IS tracked; only the venv is ignored)
 

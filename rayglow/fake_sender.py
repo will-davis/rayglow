@@ -15,7 +15,7 @@ for the wire format; the two now share the contract in
 rayglow/feed/receiver.py. (Historical packet record:
 docs/design-history/project-milk-pi.md §5, which describes the v0 ancestor.)
 
-Run:  ~/rgbvenv/bin/python -m rayglow.fake_sender [--host H] [--port P] [--bpm N]
+Run:  ~/venv/bin/python -m rayglow.fake_sender [--host H] [--port P] [--bpm N]
 """
 import argparse
 import math

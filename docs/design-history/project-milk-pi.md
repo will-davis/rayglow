@@ -13,7 +13,7 @@
 MilkDrop-style audio-reactive visualizations, rebuilt from scratch, rendered on an RGB LED
 matrix. Audio plays on the desktop; the Pi only renders.
 
-This document started as a handoff brief from `will-desktop` (written after getting
+This document started as a handoff brief from `desktop` (written after getting
 MilkDrop3 running under Wine and studying its source — `code/` in this repo:
 https://github.com/milkdrop2077/MilkDrop3) and is now the shared project record. Both
 machines keep a copy: `~/Projects/MilkDrop3/project-milk-pi.md` (desktop) and
@@ -25,7 +25,7 @@ the panel with real music (June 2026).**
 ## 1. System architecture
 
 ```
-will-desktop (192.168.1.105, CachyOS, PipeWire)          raspberry pi 4b (192.168.2.108)
+desktop (192.168.0.10, CachyOS, PipeWire)          raspberry pi 4b (192.168.0.50)
 ┌─────────────────────────────────────────┐        ┌──────────────────────────────┐
 │ music playback ──▶ sink monitor source  │        │  UDP listener (latest-wins)  │
 │        │                                │  UDP   │        │                     │
@@ -40,7 +40,7 @@ will-desktop (192.168.1.105, CachyOS, PipeWire)          raspberry pi 4b (192.16
 Division of labor:
 - **Desktop daemon** (`~/Projects/milk-pi/sender.py`, uv project): captures the PipeWire
   monitor source, extracts audio features, blasts UDP. Negligible CPU cost there (~1.7%).
-- **Pi renderer** (`~/rpi-rgb-led-matrix/will-rpi-custom/milk/`): receives features, runs
+- **Pi renderer** (`~/rpi-rgb-led-matrix/rpi-custom/milk/`): receives features, runs
   the visualization core loop, drives the matrix. The Pi is already heavily loaded
   bit-banging HUB75 via the hzeller library (with hardware mods), so it does **zero audio
   work** — no capture, no FFT.
@@ -189,9 +189,9 @@ presets. Two kinds of presets:
   (1.0 fit / 0.0 faithful-crop).
 
 Run (on the Pi):
-- Playlist: `sudo ~/rgbvenv/bin/python -m milk --milk <dir|keepers.txt> [--duration N]
+- Playlist: `sudo ~/venv/bin/python -m milk --milk <dir|keepers.txt> [--duration N]
   [--shuffle]` — keys n/p/space/r/q; presets preloaded pre-privilege-drop.
-- Hand-written: `sudo ~/rgbvenv/bin/python -m milk --preset tunnel`
+- Hand-written: `sudo ~/venv/bin/python -m milk --preset tunnel`
 - Triage a preset library: `python -m milk.dotmilk.triage <dir> -o <out>` → grades every
   preset (sheets + report + keepers.txt).
 
@@ -253,11 +253,11 @@ The network is the cheapest line item. The war is won in capture quantum and ren
 
 - Geometry: **4 panels chained = 256×32** (`CHAIN=4` in `milk/config.py` is the one knob
   if panel 5 returns). Pi headless perf: ~440 fps tunnel / ~290 wobble.
-- Pi: **192.168.2.108** (IoT VLAN, WiFi, DHCP — consider a dnsmasq reservation since
+- Pi: **192.168.0.50** (IoT VLAN, WiFi, DHCP — consider a dnsmasq reservation since
   sender.py defaults to this IP), UDP port **5005**. Desktop→Pi UDP 5005 crosses VLANs
   with no OPNsense rule needed (verified via ICMP-unreachable probe).
-- Pi code: `/home/will/rpi-rgb-led-matrix/will-rpi-custom/milk/` (mounted on desktop at
-  `~/local-mount/rpi4/`).
+- Pi code: `/rpi-rgb-led-matrix/rpi-custom/milk/` (mounted on desktop at
+  `~/pi-mount/`).
 - Preset library: `milk/presets/dotmilk-presets/` (311 presets; the MilkDrop3 repo clone
   ships none — the desktop Wine install has the full set at
   `~/.wine-milkdrop3/drive_c/users/will/Desktop/MilkDrop 3.31/Milkdrop3/presets/`).
@@ -271,7 +271,7 @@ one antenna between WiFi and BT — coexistence makes both worse). If/when revis
 order:
 1. **Free:** disable WiFi power-save on the Pi — `sudo iw dev wlan0 set power_save off`;
    persist via `nmcli con mod <wifi-con> 802-11-wireless.powersave 2` (Bookworm/NM).
-2. **Clean:** point-to-point Ethernet. will-desktop has an idle dual-port Intel X540
+2. **Clean:** point-to-point Ethernet. desktop has an idle dual-port Intel X540
    10GBASE-T (`enp132s0f0/f1`); 10GBASE-T autonegotiates down to the Pi's 1GbE. One 5-ft
    cable, private /30, **no switch port, no VLAN, no OPNsense changes** — the subnet
    exists only on the wire: desktop `nmcli con add type ethernet ifname enp132s0f0
@@ -281,14 +281,14 @@ order:
 
 ## 8. Status
 
-- [x] MilkDrop3 running on will-desktop (Wine, dedicated prefix `~/.wine-milkdrop3`,
+- [x] MilkDrop3 running on desktop (Wine, dedicated prefix `~/.wine-milkdrop3`,
       `milkdrop3` launcher) — reference visuals live
 - [x] Pipeline reverse-engineered (this doc)
 - [x] Pi: renderer framework + fake-sender harness — built & verified headless
 - [x] Desktop: feature daemon — `~/Projects/milk-pi/sender.py` (uv project). Faithful FFT
       front-end + AutoGain (see §2); band split validated with 110 Hz/6 kHz/10 kHz tones;
       auto-targets monitor of default sink (`--source` to override). Run:
-      `cd ~/Projects/milk-pi && uv run sender.py` (defaults to 192.168.2.108:5005).
+      `cd ~/Projects/milk-pi && uv run sender.py` (defaults to 192.168.0.50:5005).
 - [x] **End-to-end on the panel with real music — working (June 2026), first try**
 - [x] Real .milk presets — dotmilk parser/transpiler/runtime + triage (see §4)
 - [ ] Packet v1 — only if the v0 layout ever needs changing (wave stereo/length)

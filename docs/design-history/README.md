@@ -14,3 +14,8 @@ current docs win.
   rough timeline. Captures what lived only in a long agent context, so it isn't lost when
   that context is. Written against the pre-restructure layout — see its header banner for
   the path remap.
+- **`PROJECT-PLAN.md`** — the master plan for the RP2350 firmware + custom HAT (the
+  downstream half, folded in from the former `rp2350-rgb-driver` repo): locked
+  architecture decisions, the phased bring-up, GPIO pin map, and a bench-gear reality
+  check. The durable design intent behind `firmware/` and `hardware/`; the code and their
+  READMEs win where they've moved on.

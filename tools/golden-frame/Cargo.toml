@@ -1,0 +1,23 @@
+[package]
+name = "golden-frame"
+version = "0.1.0"
+edition = "2021"
+
+# Host-side reference generator for the Phase-5 SPI bit-plane contract.
+#
+# It vendors — VERBATIM — the gamma-LUT math from firmware/src/lut.rs and the
+# bulk repack from firmware/src/lib.rs `Display::render`, and uses the SAME
+# `libm` version the firmware pins (0.2.16). Output is therefore bit-identical
+# to what the rp2350b firmware would hold in its inactive framebuffer for a
+# given input frame — the golden file the Python packer (rayglow/render/hub75.py) must
+# reproduce byte-for-byte. If lib.rs/lut.rs change, this MUST be updated to match.
+
+[dependencies]
+libm = "=0.2.16"
+
+[[bin]]
+name = "golden-frame"
+path = "src/main.rs"
+
+[profile.release]
+opt-level = 2

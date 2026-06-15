@@ -1,6 +1,6 @@
 > **Archived as written, 2026-06-07.** A knowledge-export brain-dump from the Pi-side
 > build agent, captured just before this repo restructure — so its paths and package
-> names refer to the **pre-RayGLow** layout: `will-rpi-custom/` is now this repo,
+> names refer to the **pre-RayGLow** layout: `rpi-custom/` is now this repo,
 > `milk/` → `rayglow/feed` + `rayglow/legacy`, `shadertoy/` → `rayglow/render`,
 > `MilkDrop3/project-milk-pi.md` → `docs/design-history/project-milk-pi.md`. The
 > *facts* (hardware tuning, EGL quirks, calibration constants, load-bearing oddities)
@@ -9,7 +9,7 @@
 
 # BUILD-HISTORY.md
 
-Knowledge export for `will-rpi-custom/` — the undocumented "why" behind the code.
+Knowledge export for `rpi-custom/` — the undocumented "why" behind the code.
 Captures decisions, dead ends, empirical quirks, calibration, and load-bearing
 oddities that are NOT already in code docstrings, the repo `CLAUDE.md`, or
 `MilkDrop3/project-milk-pi.md`. Facts and history only.
@@ -61,7 +61,7 @@ in `MilkDrop3/project-milk-pi.md`; this file deliberately does not repeat it.
   pipeline imports it (`from milk import config`) rather than duplicating the 256×32
   numbers. `CHAIN=4` is the one knob if the removed 5th panel returns.
 - **`drop_privileges = 0` for the shadertoy runner** (we keep root). Hot reload re-reads
-  the `.glsl` from `/home/will` after `RGBMatrix()` is constructed, and `/home/will` is
+  the `.glsl` from `` after `RGBMatrix()` is constructed, and `` is
   mode 0700 — the `daemon` user the library drops to cannot traverse it. Since these
   tools already run under `sudo`, staying root is the path of least resistance. See §3
   and §5.
@@ -126,7 +126,7 @@ in `MilkDrop3/project-milk-pi.md`; this file deliberately does not repeat it.
   crashed on hardware. `numpy.ma` is imported lazily on the first `np.percentile()` call;
   if that first call happens after the privilege drop, it dies with
   `ModuleNotFoundError: No module named 'numpy.ma'` because site-packages is under
-  `~/rgbvenv` which `daemon` can't reach. Hit in `gray-scott.py`. The fix (warm up the
+  `~/venv` which `daemon` can't reach. Hit in `gray-scott.py`. The fix (warm up the
   full path before `RGBMatrix()`) is now standard, but the naive version is a real dead
   end that passes every headless test.
 - **Audio-texture spectrum as a dynamic control signal** — worked but rejected: the
@@ -174,13 +174,13 @@ boundary. Fixed by slowdown 5 (sampling margin) + the ground strap (stiffer refe
 
 - **Raspberry Pi 4B (4 GB)** is also the dev box — everything builds and runs on the Pi
   itself, including the agent sessions.
-- **Pi IP 192.168.2.108**, IoT VLAN, WiFi, DHCP. Desktop→Pi UDP 5005 crosses VLANs with
+- **Pi IP 192.168.0.50**, IoT VLAN, WiFi, DHCP. Desktop→Pi UDP 5005 crosses VLANs with
   no OPNsense rule needed (verified via ICMP-unreachable probe).
-- **The Pi filesystem is mounted on the desktop** at `~/local-mount/rpi4/`; the user
+- **The Pi filesystem is mounted on the desktop** at `~/pi-mount/`; the user
   edits/copies files across that mount. The desktop sender lives at
-  `will-desktop:~/Projects/milk-pi/sender.py`; `will-rpi-custom/sender.py` is the
+  `desktop:~/Projects/milk-pi/sender.py`; `rpi-custom/sender.py` is the
   reference copy the user pushes back to the desktop and restarts there.
-- **Ollama server at 192.168.1.101:11434** (gemma3:latest default) for the `ollama.py`
+- **Ollama server at 192.168.0.20:11434** (gemma3:latest default) for the `ollama.py`
   LLM-shell experiment.
 
 ### EGL / GL driver behavior (Pi 4B, V3D)
@@ -204,13 +204,13 @@ boundary. Fixed by slowdown 5 (sampling margin) + the ground strap (stiffer refe
 
 ### The venv
 
-- **`~/rgbvenv`** holds numpy, PIL, and the `rgbmatrix` Python binding. Run as root via
-  `sudo ~/rgbvenv/bin/python ...`.
+- **`~/venv`** holds numpy, PIL, and the `rgbmatrix` Python binding. Run as root via
+  `sudo ~/venv/bin/python ...`.
 - **Environments are managed with `uv`** (user preference, 2026-06-01): `uv venv`,
-  `uv pip install --python /home/will/rgbvenv/bin/python <pkg>`.
+  `uv pip install --python /venv/bin/python <pkg>`.
 - **How `rgbmatrix` got installed**: the repo became pip-installable in the Feb 2026
   Python overhaul (`pip install .` from the repo root, scikit-build-core + Cython). The
-  binding in the venv comes from that. (uncertain whether `rgbvenv` was built with
+  binding in the venv comes from that. (uncertain whether `venv` was built with
   `--system-site-packages` or the deps were installed directly.)
 
 ---
@@ -272,7 +272,7 @@ This is the most important section. Each item looks like cruft or a mistake and 
 
 - **`drop_privileges = 0` in the shadertoy runner is intentional, not a security
   oversight.** Reverting it to the default breaks hot reload: the `daemon` user can't
-  traverse `/home/will` (mode 0700) to re-read the `.glsl`. Everything here runs under
+  traverse `` (mode 0700) to re-read the `.glsl`. Everything here runs under
   sudo by necessity (GPIO), so staying root is deliberate.
 - **All imports and file loads happen BEFORE `RGBMatrix()` everywhere.** This is not
   stylistic ordering — it's the privilege-drop guard. A lazy import (`numpy.ma` via
@@ -334,7 +334,7 @@ This is the most important section. Each item looks like cruft or a mistake and 
 ## 6. Unfinished threads
 
 - **The desktop sender must be redeployed for v1 to take effect live.** Until
-  `will-rpi-custom/sender.py` is copied to `will-desktop:~/Projects/milk-pi/sender.py`
+  `rpi-custom/sender.py` is copied to `desktop:~/Projects/milk-pi/sender.py`
   and restarted, the live stream is v0 and `sub` falls back to `bass`. The Pi side already
   accepts both, so order is safe. (uncertain: whether the user has now done this — they
   reported "reconfiguring of the sender.py ran without issue," which suggests yes.)
@@ -359,7 +359,7 @@ This is the most important section. Each item looks like cruft or a mistake and 
 ## 7. Timeline sketch (approximate; uncertain on exact dates)
 
 - **~2026-02 (Feb):** repo Python overhaul — whole repo becomes pip-installable
-  (scikit-build-core + Cython). `rgbmatrix` ends up in `~/rgbvenv` from this.
+  (scikit-build-core + Cython). `rgbmatrix` ends up in `~/venv` from this.
 - **~2026-06-01:** user adopts `uv` for venv management.
 - **Early June 2026:** hardware artifact hunt — PWM solder mod, `snd_bcm2835` blacklist,
   `tuner.py` sweeps, the elimination chain (EMI / bulk cap / rail sag all ruled out),

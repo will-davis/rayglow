@@ -6,10 +6,10 @@ inactive framebuffer, so the firmware's PIO+DMA receive path drops it straight i
 with zero CPU touch-up.
 
 It is a 1:1 port of the firmware's `Display::render` (firmware/src/lib.rs) and
-gamma LUT (firmware/src/lut.rs) in the rp2350-rgb-driver repo, and is proven
-**byte-identical** to the firmware by that repo's host-tools/verify.py (which
-builds a golden frame with the firmware's own `libm`). If you change the layout
-or gamma here, re-run that verifier and keep firmware + this file in lockstep.
+gamma LUT (firmware/src/lut.rs), and is proven **byte-identical** to the firmware
+by tools/verify.py (which builds a golden frame with the firmware's own `libm`).
+If you change the layout or gamma here, re-run that verifier and keep the
+firmware + this file in lockstep.
 
 Wire format (the "full display" = chain/row A over chain/row B):
   - Wall   : SPI_WIDTH x SPI_HEIGHT (256 x 64), SPI_BITDEPTH planes, gamma SPI_GAMMA
@@ -54,7 +54,7 @@ def build_gamma_lut() -> np.ndarray:
     Firmware: value = roundf(max * powf(index/255, gamma)), max = (1<<B)-1,
     source_max = 255 (Rgb888) so remapped == index. Replicated in float32 with
     round-half-away (floor(x+0.5)) to mirror C `roundf`. Verified bit-identical
-    to the firmware's libm output by host-tools/verify.py.
+    to the firmware's libm output by tools/verify.py.
     """
     target_max = np.float32((1 << B) - 1)
     idx = np.arange(1 << B, dtype=np.float32)

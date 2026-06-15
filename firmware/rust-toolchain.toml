@@ -1,0 +1,18 @@
+# Pinned nightly toolchain.
+#
+# Why nightly: the Phase 1 port of kjagiello's `hub75-pio-rs` uses
+# `#![feature(generic_const_exprs)]` for compile-time framebuffer sizing.
+# Phase 0 (this blink) needs no nightly features, but we pin nightly now so the
+# whole crate shares one toolchain. Per PROJECT-PLAN §11.5, if const-generics
+# friction bites, we can fall back to fixed W/H/B consts on stable and relax
+# this channel.
+#
+# Channel is the rolling `nightly` for now so the first bootstrap always
+# resolves a build that has every component below. Lock it to a dated
+# `nightly-YYYY-MM-DD` once Phase 1 confirms `generic_const_exprs` + rp235x-hal
+# build cleanly together — that gives reproducibility without risking a
+# first-install failure on a date that happens to be missing a component.
+[toolchain]
+channel = "nightly"
+components = ["rust-src", "rustfmt", "clippy", "llvm-tools"]
+targets = ["thumbv8m.main-none-eabihf"]

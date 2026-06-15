@@ -1,9 +1,9 @@
 """SPI frame output backend — ships packed bit-plane frames to the rp2350b.
 
-Replaces the hzeller rgbmatrix output on the new split rig: this host (rpi5)
-renders + packs (hub75.pack), the RP2350 receives over SPI and drives the
-panels. The READY handshake makes it self-pacing — we block until the rp2350b
-has armed its RX DMA, then push one 64 KB transfer.
+On the split rig this host (rpi5) renders + packs (hub75.pack), and the RP2350
+receives over SPI and drives the panels. The READY handshake makes it
+self-pacing — we block until the rp2350b has armed its RX DMA, then push one
+64 KB transfer.
 
 rpi5-only deps (install on the Pi):  uv add spidev gpiozero lgpio
 Prereqs: SPI enabled + /sys/module/spidev/parameters/bufsiz >= 65536 (so the

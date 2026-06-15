@@ -2,8 +2,9 @@
 
 The broadcast half of RayGLow. `sender.py` (one file) captures whatever the desktop is
 playing, reduces it to a handful of per-frame audio features, and unicasts them over UDP
-at ~60 Hz to the Pi, which renders them as GLSL on a 256×32 HUB75 panel. For the
-system-level picture and the renderer, see the [top-level README](../README.md).
+at ~60 Hz to the Pi, which renders them as GLSL and drives a 256×64 HUB75 wall (via an
+RP2350 over SPI). For the system-level picture and the renderer, see the
+[top-level README](../README.md).
 
 This is a standalone uv project: it shares no code with the `rayglow` package — only the
 **packet contract** (mirrored in `rayglow/feed/receiver.py`). The daemon only ever
@@ -13,7 +14,7 @@ This is a standalone uv project: it shares no code with the `rayglow` package �
 
 ```fish
 cd sender
-uv run sender.py                  # monitor of default sink -> 192.168.2.108:5005
+uv run sender.py                  # monitor of default sink -> 192.168.0.50:5005
 uv run sender.py --list-sources   # enumerate pulse sources
 uv run sender.py --source NAME    # capture a specific source instead
 uv run sender.py --debug          # adds raw pre-normalization band energies

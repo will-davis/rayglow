@@ -1,14 +1,14 @@
 """Shadertoy renderer entry point.
 
-Headless dry-run (no root, no rgbmatrix import; writes an animated GIF):
-    ~/rgbvenv/bin/python -m shadertoy ../example.glsl --dry-run 120
+Headless dry-run (no root, no hardware; writes an animated GIF):
+    ~/venv/bin/python -m rayglow.render ../example.glsl --dry-run 120
 
 Hardware (user runs this; root needed for GPIO):
-    sudo ~/rgbvenv/bin/python -m shadertoy ../example.glsl
+    sudo ~/venv/bin/python -m rayglow.render ../example.glsl
 
 Texture/audio channels — bind iChannel0..3 with --channelN flags or, better,
 `// iChannelN: spec` comment directives inside the shader file:
-    sudo ~/rgbvenv/bin/python -m shadertoy presets/foo.glsl \\
+    sudo ~/venv/bin/python -m rayglow.render presets/foo.glsl \\
         --channel0 audio --channel1 noise --channel2 pic.png
 
 'audio' is the Shadertoy 512x2 spectrum/waveform texture, fed live from the
@@ -48,8 +48,8 @@ from .reload import GlslWatcher
 
 
 def pin_to_core(core):
-    """Pin the render thread off core 3 (owned by the hzeller GPIO thread).
-    Per-thread on Linux, so the matrix update thread is unaffected."""
+    """Pin the render thread to a dedicated core so frame pacing doesn't fight
+    scheduler migration.  Per-thread on Linux (affects only this thread)."""
     try:
         os.sched_setaffinity(0, {core})
     except OSError as e:
@@ -145,64 +145,14 @@ def run_dry(toy, feed, args):
     sys.exit(0 if ok else 1)
 
 
-def run_matrix(toy, watchers, feed, args):
-    # Everything filesystem/import-shaped happens BEFORE RGBMatrix().  We
-    # also set drop_privileges=0 (we keep root) so hot reload can re-read
-    # the .glsl afterwards — /home/will is unreadable post-drop otherwise.
-    from PIL import Image
-    if feed:
-        feed.update(0.0, 1.0 / 60)             # warm np.fft path too
-    Image.fromarray(toy.render(0.0, 1.0 / 60, 0), "RGB")  # warm full path
-
-    from rgbmatrix import RGBMatrix
-    options = config.matrix_options()
-    options.drop_privileges = 0
-    matrix = RGBMatrix(options=options)
-    canvas = matrix.CreateFrameCanvas()        # create ONCE, reuse forever
-    pin_to_core(config.RENDER_CORE)            # after init
-
-    frame_interval = 1.0 / args.fps
-    t0 = time.perf_counter()
-    last = t0
-    fps_frames, fps_t = 0, t0
-    frame = 0
-    try:
-        while True:
-            now = time.perf_counter()
-            if args.duration and now - t0 >= args.duration:
-                break
-            maybe_reload(toy, watchers)
-            if feed:
-                feed.update(now - t0, now - last)
-            buf = toy.render(now - t0, now - last, frame)
-            last = now
-            frame += 1
-            canvas.SetImage(Image.fromarray(buf, "RGB"))
-            canvas = matrix.SwapOnVSync(canvas)
-
-            fps_frames += 1
-            if now - fps_t >= 5.0:
-                print(f"{fps_frames / (now - fps_t):6.1f} fps")
-                fps_frames, fps_t = 0, now
-            # SwapOnVSync paces to the matrix refresh; additionally cap to
-            # --fps so we don't render frames nobody asked for.
-            sleep = frame_interval - (time.perf_counter() - now)
-            if sleep > 0:
-                time.sleep(sleep)
-    except KeyboardInterrupt:
-        pass
-    finally:
-        matrix.Clear()
-
-
 def run_spi(toy, watchers, feed, args):
-    """Phase 5: render + pack + ship frames to the rp2350b over SPI.
+    """Render + pack + ship frames to the rp2350b over SPI (the only output).
 
-    Mirrors run_matrix but swaps the hzeller output for the bit-plane packer
-    (hub75.pack, byte-identical to the firmware) + the SPI backend. The READY
+    The render readback is LINEAR (args.gamma forced to 1.0) and gets packed
+    into bit-planes (hub75.pack, byte-identical to the firmware) before going
+    out over SPI; the rp2350b applies the CIE gamma LUT downstream. The READY
     handshake self-paces: out.send() blocks until the rp2350b has armed its RX
-    DMA, then pushes one 64 KB transfer. Frames are LINEAR (args.gamma forced to
-    1.0 for spi) — the firmware applies the CIE gamma LUT downstream.
+    DMA, then pushes one 64 KB transfer.
     """
     from .hub75 import pack
     from .spi_out import SpiOut
@@ -229,6 +179,13 @@ def run_spi(toy, watchers, feed, args):
             if feed:
                 feed.update(now - t0, now - last)
             buf = toy.render(now - t0, now - last, frame)  # (H,W,3) uint8 LINEAR
+            # Physical-install orientation (see config): the wall is rotated 180deg
+            # from the rendered frame, so flip both axes before packing.
+            if config.SPI_FLIP_V:
+                buf = buf[::-1]
+            if config.SPI_FLIP_H:
+                buf = buf[:, ::-1]
+            buf = np.ascontiguousarray(buf)
             last = now
             frame += 1
             out.send(pack(buf))           # blocks on READY, one 64 KB SPI transfer
@@ -258,17 +215,14 @@ def main():
                     help="target fps cap (default 60)")
     ap.add_argument("--scale", type=int, default=4,
                     help="supersample factor (default 4; 1 = pixel-exact)")
-    ap.add_argument("--gamma", type=float, default=None,
-                    help="readback gamma; defaults to 1.0 for --output spi (the "
-                         "rp2350b firmware applies the CIE LUT, so this side stays "
-                         f"linear) and {config.GAMMA} for --output matrix")
-    ap.add_argument("--output", choices=("spi", "matrix"), default="spi",
-                    help="frame sink: 'spi' = rp2350b over SPI (default); "
-                         "'matrix' = local hzeller rgbmatrix (legacy)")
+    ap.add_argument("--gamma", type=float, default=1.0,
+                    help="readback gamma (default 1.0 = LINEAR; the rp2350b "
+                         "firmware applies the CIE LUT, so correcting here too "
+                         "would double-correct)")
     ap.add_argument("--spi-hz", type=int, default=24_000_000,
-                    help="SPI clock in Hz for --output spi (start low, then ramp)")
+                    help="SPI clock in Hz (start low, then ramp)")
     ap.add_argument("--ready-gpio", type=int, default=25,
-                    help="BCM pin reading the rp2350b READY line (--output spi)")
+                    help="BCM pin reading the rp2350b READY line")
     ap.add_argument("--duration", type=float, default=0.0,
                     help="stop after N seconds (default: run forever)")
     ap.add_argument("--dry-run", nargs="?", const=120, type=int, default=None,
@@ -277,11 +231,9 @@ def main():
     ap.add_argument("--out", default="/tmp/shadertoy_out.gif",
                     help="dry-run GIF path (default /tmp/shadertoy_out.gif)")
     ap.add_argument("--width", type=int, default=None,
-                    help="render width (default: per --output; spi=%d, matrix=%d)"
-                         % (config.SPI_WIDTH, config.WIDTH))
+                    help="render width (default: %d)" % config.SPI_WIDTH)
     ap.add_argument("--height", type=int, default=None,
-                    help="render height (default: per --output; spi=%d, matrix=%d)"
-                         % (config.SPI_HEIGHT, config.HEIGHT))
+                    help="render height (default: %d)" % config.SPI_HEIGHT)
     for i in range(4):
         ap.add_argument(f"--channel{i}", metavar="SPEC", default=None,
                         help=("iChannel0 source: 'audio', 'milk', "
@@ -293,17 +245,13 @@ def main():
                          "synth fallback only")
     args = ap.parse_args()
 
-    # Resolve geometry/gamma defaults from the chosen backend. The SPI path is
-    # the full two-chain display (256x64) and renders LINEAR — the rp2350b
-    # firmware owns the CIE gamma LUT (config.SPI_GAMMA), so applying gamma here
-    # too would double-correct. The legacy matrix path keeps its own values.
-    spi = args.output == "spi"
+    # Geometry defaults to the full two-chain display (256x64). The render
+    # readback is LINEAR (gamma 1.0) because the rp2350b owns the CIE gamma LUT
+    # (config.SPI_GAMMA) — applying gamma here too would double-correct.
     if args.width is None:
-        args.width = config.SPI_WIDTH if spi else config.WIDTH
+        args.width = config.SPI_WIDTH
     if args.height is None:
-        args.height = config.SPI_HEIGHT if spi else config.HEIGHT
-    if args.gamma is None:
-        args.gamma = 1.0 if spi else config.GAMMA
+        args.height = config.SPI_HEIGHT
 
     try:
         ctx = GLContext()
@@ -343,10 +291,8 @@ def main():
 
     if dry:
         run_dry(toy, feed, args)
-    elif args.output == "spi":
-        run_spi(toy, watchers, feed, args)
     else:
-        run_matrix(toy, watchers, feed, args)
+        run_spi(toy, watchers, feed, args)
 
 
 if __name__ == "__main__":

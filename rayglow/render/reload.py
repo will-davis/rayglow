@@ -1,7 +1,7 @@
 """Hot reload: stat the .glsl every frame, recompile on mtime change.
 
 Requires the process to keep root (options.drop_privileges = 0) — after the
-default privilege drop, files under /home/will become unreadable.
+default privilege drop, files under  become unreadable.
 """
 import os
 

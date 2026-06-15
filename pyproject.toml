@@ -10,23 +10,18 @@ readme = "README.md"
 requires-python = ">=3.11"
 # Core deps for the live renderer (rayglow.render) + feed (rayglow.feed).
 #   numpy  — feature math, packet (de)serialization, frame buffers
-#   Pillow — RGBMatrix.SetImage / dry-run GIF output
+#   Pillow — dry-run GIF output
 dependencies = [
     "numpy",
     "Pillow",
 ]
 
-# IMPORTANT: rgbmatrix (hzeller's rpi-rgb-led-matrix) is a hard runtime
-# requirement for HARDWARE mode, but it is deliberately NOT listed here. It
-# only builds on the Pi (cython + GPIO), so listing it would break
-# `pip install` / `uv` on the desktop. On the Pi it's pre-built in ~/rgbvenv;
-# the headless dry-run path imports it lazily and never needs it. See
-# ATTRIBUTION.md and the top-level README for the deploy story.
-
 [project.optional-dependencies]
-# The retired NumPy/OpenCV renderer (rayglow.legacy) additionally needs OpenCV.
-# `pip install -e .[legacy]` to run it.
-legacy = ["opencv-python"]
+# Hardware output on the Pi: the SPI backend (render/spi_out.py) ships packed
+# frames to the rp2350b and reads its READY line.  These are Pi-only and
+# imported lazily, so the desktop dry-run path never needs them — install with
+# `uv pip install -e .[pi]` on the Pi.  (EGL/GLES come from system libs, not pip.)
+pi = ["spidev", "gpiozero", "lgpio"]
 
 [tool.setuptools.packages.find]
 include = ["rayglow*"]

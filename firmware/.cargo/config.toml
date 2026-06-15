@@ -1,0 +1,25 @@
+# Target + flash/log configuration for the RP2350 (Cortex-M33).
+#
+# Runner: probe-rs drives a CMSIS-DAP probe (a spare Pico flashed as a
+# `debugprobe`). `probe-rs run` flashes the ELF, resets, and attaches RTT so
+# `defmt` logs stream back to the host terminal. The RP2350 probe-rs chip
+# name is `RP235x`.
+#
+# To flash over USB BOOTSEL instead (no probe, no RTT logs), comment out the
+# runner and use `picotool load -u -v -x -t elf <elf>` manually.
+
+[build]
+target = "thumbv8m.main-none-eabihf"   # Cortex-M33 (Arm). NOT the RP2040's thumbv6m.
+
+[target.thumbv8m.main-none-eabihf]
+runner = "probe-rs run --chip RP235x"
+rustflags = [
+    "-C", "link-arg=--nmagic",
+    "-C", "link-arg=-Tlink.x",     # from cortex-m-rt; pulls in memory.x
+    "-C", "link-arg=-Tdefmt.x",    # from defmt; sets up the RTT log section
+    "-C", "target-cpu=cortex-m33",
+]
+
+[env]
+# defmt log level filter, compiled in. Lower to "info" once bring-up is noisy.
+DEFMT_LOG = "debug"

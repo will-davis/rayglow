@@ -1,0 +1,1297 @@
+(export 
+  (version "D")
+  (design
+    (source "gen_hat.py")
+    (date "06/12/2026 01:25 AM")
+    (tool "SKiDL (2.2.3)")
+    (sheet
+      (number 1)
+      (name "/")
+      (tstamps "/")
+      (title_block
+        (title)
+        (company)
+        (rev)
+        (date)
+        (source "gen_hat.py")
+        (comment
+          (number "1")
+          (value ""))
+        (comment
+          (number "2")
+          (value ""))
+        (comment
+          (number "3")
+          (value ""))
+        (comment
+          (number "4")
+          (value ""))
+        (comment
+          (number "5")
+          (value ""))
+        (comment
+          (number "6")
+          (value ""))
+        (comment
+          (number "7")
+          (value ""))
+        (comment
+          (number "8")
+          (value ""))
+        (comment
+          (number "9")
+          (value "")))))
+  (components
+    (comp
+      (ref "C1")
+      (value "100nF")
+      (description "Unpolarized capacitor")
+      (footprint "Capacitor_SMD:C_0805_2012Metric")
+      (fields
+        (field
+          (name "Description") "Unpolarized capacitor")
+        (field
+          (name "Footprint") "Capacitor_SMD:C_0805_2012Metric")
+        (field
+          (name "Datasheet"))
+        (field
+          (name "SKiDL Tag") "pZfTT5h8GV")
+        (field
+          (name "SKiDL Line") "gen_hat.py:148"))
+      (libsource
+        (lib "Device")
+        (part "C"))
+      (sheetpath
+        (names "/")
+        (tstamps "/"))
+      (tstamps "56e89d57-22ad-5d17-9e20-75b2a0a789ca"))
+    (comp
+      (ref "C2")
+      (value "100nF")
+      (description "Unpolarized capacitor")
+      (footprint "Capacitor_SMD:C_0805_2012Metric")
+      (fields
+        (field
+          (name "Description") "Unpolarized capacitor")
+        (field
+          (name "Footprint") "Capacitor_SMD:C_0805_2012Metric")
+        (field
+          (name "Datasheet"))
+        (field
+          (name "SKiDL Tag") "EAVrzv6E2H")
+        (field
+          (name "SKiDL Line") "gen_hat.py:148"))
+      (libsource
+        (lib "Device")
+        (part "C"))
+      (sheetpath
+        (names "/")
+        (tstamps "/"))
+      (tstamps "296d0001-c1fd-516c-8389-b6df939130b5"))
+    (comp
+      (ref "C3")
+      (value "100nF")
+      (description "Unpolarized capacitor")
+      (footprint "Capacitor_SMD:C_0805_2012Metric")
+      (fields
+        (field
+          (name "Description") "Unpolarized capacitor")
+        (field
+          (name "Footprint") "Capacitor_SMD:C_0805_2012Metric")
+        (field
+          (name "Datasheet"))
+        (field
+          (name "SKiDL Tag") "4MWEhLTCJn")
+        (field
+          (name "SKiDL Line") "gen_hat.py:148"))
+      (libsource
+        (lib "Device")
+        (part "C"))
+      (sheetpath
+        (names "/")
+        (tstamps "/"))
+      (tstamps "55fcc023-106c-5b98-8eda-2aec7543896d"))
+    (comp
+      (ref "C4")
+      (value "100nF")
+      (description "Unpolarized capacitor")
+      (footprint "Capacitor_SMD:C_0805_2012Metric")
+      (fields
+        (field
+          (name "Description") "Unpolarized capacitor")
+        (field
+          (name "Footprint") "Capacitor_SMD:C_0805_2012Metric")
+        (field
+          (name "Datasheet"))
+        (field
+          (name "SKiDL Tag") "7jgcw_tOAh")
+        (field
+          (name "SKiDL Line") "gen_hat.py:148"))
+      (libsource
+        (lib "Device")
+        (part "C"))
+      (sheetpath
+        (names "/")
+        (tstamps "/"))
+      (tstamps "865d5a5d-2ee9-57b4-ba2d-23c5d940ed4d"))
+    (comp
+      (ref "C5")
+      (value "100uF")
+      (description "Unpolarized capacitor")
+      (footprint "Capacitor_SMD:CP_Elec_6.3x7.7")
+      (fields
+        (field
+          (name "Description") "Unpolarized capacitor")
+        (field
+          (name "Footprint") "Capacitor_SMD:CP_Elec_6.3x7.7")
+        (field
+          (name "Datasheet"))
+        (field
+          (name "SKiDL Tag") "57zakoSWRj")
+        (field
+          (name "SKiDL Line") "gen_hat.py:151"))
+      (libsource
+        (lib "Device")
+        (part "C"))
+      (sheetpath
+        (names "/")
+        (tstamps "/"))
+      (tstamps "1d22b15e-6007-57d1-acb7-8c55790ac7a1"))
+    (comp
+      (ref "J1")
+      (value "RP2350-PiZero")
+      (description "Generic connector, double row, 02x20, odd/even pin numbering scheme (row 1 odd numbers, row 2 even numbers), script generated (kicad-library-utils/schlib/autogen/connector/)")
+      (footprint "Connector_PinSocket_2.54mm:PinSocket_2x20_P2.54mm_Vertical")
+      (fields
+        (field
+          (name "Description") "Generic connector, double row, 02x20, odd/even pin numbering scheme (row 1 odd numbers, row 2 even numbers), script generated (kicad-library-utils/schlib/autogen/connector/)")
+        (field
+          (name "Footprint") "Connector_PinSocket_2.54mm:PinSocket_2x20_P2.54mm_Vertical")
+        (field
+          (name "Datasheet"))
+        (field
+          (name "SKiDL Tag") "6B3scpnBAq")
+        (field
+          (name "SKiDL Line") "gen_hat.py:58"))
+      (libsource
+        (lib "Connector_Generic")
+        (part "Conn_02x20_Odd_Even"))
+      (sheetpath
+        (names "/")
+        (tstamps "/"))
+      (tstamps "918598b6-6f3d-5da4-aa78-43499b1112f6"))
+    (comp
+      (ref "J2")
+      (value "HUB75_A")
+      (description "Generic connector, double row, 02x08, odd/even pin numbering scheme (row 1 odd numbers, row 2 even numbers), script generated (kicad-library-utils/schlib/autogen/connector/)")
+      (footprint "Connector_IDC:IDC-Header_2x08_P2.54mm_Vertical")
+      (fields
+        (field
+          (name "Description") "Generic connector, double row, 02x08, odd/even pin numbering scheme (row 1 odd numbers, row 2 even numbers), script generated (kicad-library-utils/schlib/autogen/connector/)")
+        (field
+          (name "Footprint") "Connector_IDC:IDC-Header_2x08_P2.54mm_Vertical")
+        (field
+          (name "Datasheet"))
+        (field
+          (name "SKiDL Tag") "sSGO0c3VV6")
+        (field
+          (name "SKiDL Line") "gen_hat.py:60"))
+      (libsource
+        (lib "Connector_Generic")
+        (part "Conn_02x08_Odd_Even"))
+      (sheetpath
+        (names "/")
+        (tstamps "/"))
+      (tstamps "e39d43bf-1be8-5b1f-8ac3-c4cccce2e2d6"))
+    (comp
+      (ref "J3")
+      (value "HUB75_B")
+      (description "Generic connector, double row, 02x08, odd/even pin numbering scheme (row 1 odd numbers, row 2 even numbers), script generated (kicad-library-utils/schlib/autogen/connector/)")
+      (footprint "Connector_IDC:IDC-Header_2x08_P2.54mm_Vertical")
+      (fields
+        (field
+          (name "Description") "Generic connector, double row, 02x08, odd/even pin numbering scheme (row 1 odd numbers, row 2 even numbers), script generated (kicad-library-utils/schlib/autogen/connector/)")
+        (field
+          (name "Footprint") "Connector_IDC:IDC-Header_2x08_P2.54mm_Vertical")
+        (field
+          (name "Datasheet"))
+        (field
+          (name "SKiDL Tag") "XuofmXrLSv")
+        (field
+          (name "SKiDL Line") "gen_hat.py:62"))
+      (libsource
+        (lib "Connector_Generic")
+        (part "Conn_02x08_Odd_Even"))
+      (sheetpath
+        (names "/")
+        (tstamps "/"))
+      (tstamps "85713eb3-7d16-5759-b08a-e5fe86e36675"))
+    (comp
+      (ref "J4")
+      (value "SPI_SYNC")
+      (description "Generic connector, single row, 01x08, script generated (kicad-library-utils/schlib/autogen/connector/)")
+      (footprint "Connector_PinHeader_2.54mm:PinHeader_1x08_P2.54mm_Vertical")
+      (fields
+        (field
+          (name "Description") "Generic connector, single row, 01x08, script generated (kicad-library-utils/schlib/autogen/connector/)")
+        (field
+          (name "Footprint") "Connector_PinHeader_2.54mm:PinHeader_1x08_P2.54mm_Vertical")
+        (field
+          (name "Datasheet"))
+        (field
+          (name "SKiDL Tag") "RHRvl6oreg")
+        (field
+          (name "SKiDL Line") "gen_hat.py:64"))
+      (libsource
+        (lib "Connector_Generic")
+        (part "Conn_01x08"))
+      (sheetpath
+        (names "/")
+        (tstamps "/"))
+      (tstamps "ef92b52b-fb6b-5721-a4c6-52c4ff062fae"))
+    (comp
+      (ref "J5")
+      (value "+5V_IN")
+      (description "Generic connector, single row, 01x02, script generated (kicad-library-utils/schlib/autogen/connector/)")
+      (footprint "TerminalBlock_Phoenix:TerminalBlock_Phoenix_MKDS-1,5-2-5.08_1x02_P5.08mm_Horizontal")
+      (fields
+        (field
+          (name "Description") "Generic connector, single row, 01x02, script generated (kicad-library-utils/schlib/autogen/connector/)")
+        (field
+          (name "Footprint") "TerminalBlock_Phoenix:TerminalBlock_Phoenix_MKDS-1,5-2-5.08_1x02_P5.08mm_Horizontal")
+        (field
+          (name "Datasheet"))
+        (field
+          (name "SKiDL Tag") "bCqhbS8kZ_")
+        (field
+          (name "SKiDL Line") "gen_hat.py:66"))
+      (libsource
+        (lib "Connector_Generic")
+        (part "Conn_01x02"))
+      (sheetpath
+        (names "/")
+        (tstamps "/"))
+      (tstamps "399efb4c-5d58-571d-a761-acf0f46eb5b3"))
+    (comp
+      (ref "R1")
+      (value "22")
+      (description "Resistor")
+      (footprint "Resistor_SMD:R_0805_2012Metric")
+      (fields
+        (field
+          (name "Description") "Resistor")
+        (field
+          (name "Footprint") "Resistor_SMD:R_0805_2012Metric")
+        (field
+          (name "Datasheet"))
+        (field
+          (name "SKiDL Tag") "KSQ6edtV1y")
+        (field
+          (name "SKiDL Line") "gen_hat.py:76"))
+      (libsource
+        (lib "Device")
+        (part "R"))
+      (sheetpath
+        (names "/")
+        (tstamps "/"))
+      (tstamps "1112f836-16f0-5088-8b88-f88f27582f7a"))
+    (comp
+      (ref "R2")
+      (value "22")
+      (description "Resistor")
+      (footprint "Resistor_SMD:R_0805_2012Metric")
+      (fields
+        (field
+          (name "Description") "Resistor")
+        (field
+          (name "Footprint") "Resistor_SMD:R_0805_2012Metric")
+        (field
+          (name "Datasheet"))
+        (field
+          (name "SKiDL Tag") "exl3HhDkh1")
+        (field
+          (name "SKiDL Line") "gen_hat.py:77"))
+      (libsource
+        (lib "Device")
+        (part "R"))
+      (sheetpath
+        (names "/")
+        (tstamps "/"))
+      (tstamps "e2e5f699-8192-5a78-9799-2afad8d50a39"))
+    (comp
+      (ref "U1")
+      (value "SN74AHCT245DWR")
+      (description "Octal BUS Transceivers, 3-State outputs")
+      (footprint "Package_SO:SOIC-20W_7.5x12.8mm_P1.27mm")
+      (fields
+        (field
+          (name "Description") "Octal BUS Transceivers, 3-State outputs")
+        (field
+          (name "Footprint") "Package_SO:SOIC-20W_7.5x12.8mm_P1.27mm")
+        (field
+          (name "Datasheet") "http://www.ti.com/lit/gpn/sn74HC245")
+        (field
+          (name "SKiDL Tag") "0NQh15HGzT")
+        (field
+          (name "SKiDL Line") "gen_hat.py:49"))
+      (libsource
+        (lib "74xx")
+        (part "74HC245"))
+      (sheetpath
+        (names "/")
+        (tstamps "/"))
+      (tstamps "b598d4e5-ad79-592b-ad4c-b9e000605530"))
+    (comp
+      (ref "U2")
+      (value "SN74AHCT245DWR")
+      (description "Octal BUS Transceivers, 3-State outputs")
+      (footprint "Package_SO:SOIC-20W_7.5x12.8mm_P1.27mm")
+      (fields
+        (field
+          (name "Description") "Octal BUS Transceivers, 3-State outputs")
+        (field
+          (name "Footprint") "Package_SO:SOIC-20W_7.5x12.8mm_P1.27mm")
+        (field
+          (name "Datasheet") "http://www.ti.com/lit/gpn/sn74HC245")
+        (field
+          (name "SKiDL Tag") "Mk1UJAKVdF")
+        (field
+          (name "SKiDL Line") "gen_hat.py:49"))
+      (libsource
+        (lib "74xx")
+        (part "74HC245"))
+      (sheetpath
+        (names "/")
+        (tstamps "/"))
+      (tstamps "fb1918a1-0ba5-56a6-a8c0-7881db02dbb6"))
+    (comp
+      (ref "U3")
+      (value "SN74AHCT245DWR")
+      (description "Octal BUS Transceivers, 3-State outputs")
+      (footprint "Package_SO:SOIC-20W_7.5x12.8mm_P1.27mm")
+      (fields
+        (field
+          (name "Description") "Octal BUS Transceivers, 3-State outputs")
+        (field
+          (name "Footprint") "Package_SO:SOIC-20W_7.5x12.8mm_P1.27mm")
+        (field
+          (name "Datasheet") "http://www.ti.com/lit/gpn/sn74HC245")
+        (field
+          (name "SKiDL Tag") "zHAhZnPdFn")
+        (field
+          (name "SKiDL Line") "gen_hat.py:49"))
+      (libsource
+        (lib "74xx")
+        (part "74HC245"))
+      (sheetpath
+        (names "/")
+        (tstamps "/"))
+      (tstamps "e6658fce-2b76-585d-8d88-656f8fab4def"))
+    (comp
+      (ref "U4")
+      (value "SN74AHCT245DWR")
+      (description "Octal BUS Transceivers, 3-State outputs")
+      (footprint "Package_SO:SOIC-20W_7.5x12.8mm_P1.27mm")
+      (fields
+        (field
+          (name "Description") "Octal BUS Transceivers, 3-State outputs")
+        (field
+          (name "Footprint") "Package_SO:SOIC-20W_7.5x12.8mm_P1.27mm")
+        (field
+          (name "Datasheet") "http://www.ti.com/lit/gpn/sn74HC245")
+        (field
+          (name "SKiDL Tag") "8nSpY5A4_r")
+        (field
+          (name "SKiDL Line") "gen_hat.py:49"))
+      (libsource
+        (lib "74xx")
+        (part "74HC245"))
+      (sheetpath
+        (names "/")
+        (tstamps "/"))
+      (tstamps "78f62dad-03cf-5abd-96ae-451d3b0ab72e")))
+  (nets
+    (net
+      (code 1)
+      (name "+3V3")
+      (class "Default")
+      (node
+        (ref "J1")
+        (pin "1")
+        (pintype "PASSIVE"))
+      (node
+        (ref "J1")
+        (pin "17")
+        (pintype "PASSIVE"))
+      (node
+        (ref "J4")
+        (pin "7")
+        (pintype "PASSIVE")))
+    (net
+      (code 2)
+      (name "+5V")
+      (class "Default")
+      (node
+        (ref "C1")
+        (pin "1")
+        (pintype "PASSIVE"))
+      (node
+        (ref "C2")
+        (pin "1")
+        (pintype "PASSIVE"))
+      (node
+        (ref "C3")
+        (pin "1")
+        (pintype "PASSIVE"))
+      (node
+        (ref "C4")
+        (pin "1")
+        (pintype "PASSIVE"))
+      (node
+        (ref "C5")
+        (pin "1")
+        (pintype "PASSIVE"))
+      (node
+        (ref "J5")
+        (pin "1")
+        (pintype "PASSIVE"))
+      (node
+        (ref "U1")
+        (pin "1")
+        (pintype "INPUT"))
+      (node
+        (ref "U1")
+        (pin "20")
+        (pintype "POWER-IN"))
+      (node
+        (ref "U2")
+        (pin "1")
+        (pintype "INPUT"))
+      (node
+        (ref "U2")
+        (pin "20")
+        (pintype "POWER-IN"))
+      (node
+        (ref "U3")
+        (pin "1")
+        (pintype "INPUT"))
+      (node
+        (ref "U3")
+        (pin "20")
+        (pintype "POWER-IN"))
+      (node
+        (ref "U4")
+        (pin "1")
+        (pintype "INPUT"))
+      (node
+        (ref "U4")
+        (pin "20")
+        (pintype "POWER-IN")))
+    (net
+      (code 3)
+      (name "GND")
+      (class "Default")
+      (node
+        (ref "C1")
+        (pin "2")
+        (pintype "PASSIVE"))
+      (node
+        (ref "C2")
+        (pin "2")
+        (pintype "PASSIVE"))
+      (node
+        (ref "C3")
+        (pin "2")
+        (pintype "PASSIVE"))
+      (node
+        (ref "C4")
+        (pin "2")
+        (pintype "PASSIVE"))
+      (node
+        (ref "C5")
+        (pin "2")
+        (pintype "PASSIVE"))
+      (node
+        (ref "J1")
+        (pin "14")
+        (pintype "PASSIVE"))
+      (node
+        (ref "J1")
+        (pin "20")
+        (pintype "PASSIVE"))
+      (node
+        (ref "J1")
+        (pin "25")
+        (pintype "PASSIVE"))
+      (node
+        (ref "J1")
+        (pin "30")
+        (pintype "PASSIVE"))
+      (node
+        (ref "J1")
+        (pin "34")
+        (pintype "PASSIVE"))
+      (node
+        (ref "J1")
+        (pin "39")
+        (pintype "PASSIVE"))
+      (node
+        (ref "J1")
+        (pin "6")
+        (pintype "PASSIVE"))
+      (node
+        (ref "J1")
+        (pin "9")
+        (pintype "PASSIVE"))
+      (node
+        (ref "J2")
+        (pin "16")
+        (pintype "PASSIVE"))
+      (node
+        (ref "J2")
+        (pin "4")
+        (pintype "PASSIVE"))
+      (node
+        (ref "J2")
+        (pin "8")
+        (pintype "PASSIVE"))
+      (node
+        (ref "J3")
+        (pin "16")
+        (pintype "PASSIVE"))
+      (node
+        (ref "J3")
+        (pin "4")
+        (pintype "PASSIVE"))
+      (node
+        (ref "J3")
+        (pin "8")
+        (pintype "PASSIVE"))
+      (node
+        (ref "J4")
+        (pin "8")
+        (pintype "PASSIVE"))
+      (node
+        (ref "J5")
+        (pin "2")
+        (pintype "PASSIVE"))
+      (node
+        (ref "U1")
+        (pin "10")
+        (pintype "POWER-IN"))
+      (node
+        (ref "U1")
+        (pin "19")
+        (pintype "INPUT"))
+      (node
+        (ref "U2")
+        (pin "10")
+        (pintype "POWER-IN"))
+      (node
+        (ref "U2")
+        (pin "19")
+        (pintype "INPUT"))
+      (node
+        (ref "U2")
+        (pin "7")
+        (pintype "TRISTATE"))
+      (node
+        (ref "U2")
+        (pin "8")
+        (pintype "TRISTATE"))
+      (node
+        (ref "U2")
+        (pin "9")
+        (pintype "TRISTATE"))
+      (node
+        (ref "U3")
+        (pin "10")
+        (pintype "POWER-IN"))
+      (node
+        (ref "U3")
+        (pin "19")
+        (pintype "INPUT"))
+      (node
+        (ref "U4")
+        (pin "10")
+        (pintype "POWER-IN"))
+      (node
+        (ref "U4")
+        (pin "19")
+        (pintype "INPUT"))
+      (node
+        (ref "U4")
+        (pin "7")
+        (pintype "TRISTATE"))
+      (node
+        (ref "U4")
+        (pin "8")
+        (pintype "TRISTATE"))
+      (node
+        (ref "U4")
+        (pin "9")
+        (pintype "TRISTATE")))
+    (net
+      (code 4)
+      (name "GP0")
+      (class "Default")
+      (node
+        (ref "J1")
+        (pin "27")
+        (pintype "PASSIVE"))
+      (node
+        (ref "U1")
+        (pin "2")
+        (pintype "TRISTATE")))
+    (net
+      (code 5)
+      (name "GP1")
+      (class "Default")
+      (node
+        (ref "J1")
+        (pin "28")
+        (pintype "PASSIVE"))
+      (node
+        (ref "U1")
+        (pin "3")
+        (pintype "TRISTATE")))
+    (net
+      (code 6)
+      (name "GP10")
+      (class "Default")
+      (node
+        (ref "J1")
+        (pin "23")
+        (pintype "PASSIVE"))
+      (node
+        (ref "U3")
+        (pin "6")
+        (pintype "TRISTATE")))
+    (net
+      (code 7)
+      (name "GP11")
+      (class "Default")
+      (node
+        (ref "J1")
+        (pin "19")
+        (pintype "PASSIVE"))
+      (node
+        (ref "U3")
+        (pin "7")
+        (pintype "TRISTATE")))
+    (net
+      (code 8)
+      (name "GP12")
+      (class "Default")
+      (node
+        (ref "J1")
+        (pin "21")
+        (pintype "PASSIVE"))
+      (node
+        (ref "U2")
+        (pin "3")
+        (pintype "TRISTATE"))
+      (node
+        (ref "U4")
+        (pin "3")
+        (pintype "TRISTATE")))
+    (net
+      (code 9)
+      (name "GP13")
+      (class "Default")
+      (node
+        (ref "J1")
+        (pin "33")
+        (pintype "PASSIVE"))
+      (node
+        (ref "U2")
+        (pin "4")
+        (pintype "TRISTATE"))
+      (node
+        (ref "U4")
+        (pin "4")
+        (pintype "TRISTATE")))
+    (net
+      (code 10)
+      (name "GP14")
+      (class "Default")
+      (node
+        (ref "J1")
+        (pin "7")
+        (pintype "PASSIVE"))
+      (node
+        (ref "U2")
+        (pin "5")
+        (pintype "TRISTATE"))
+      (node
+        (ref "U4")
+        (pin "5")
+        (pintype "TRISTATE")))
+    (net
+      (code 11)
+      (name "GP15")
+      (class "Default")
+      (node
+        (ref "J1")
+        (pin "29")
+        (pintype "PASSIVE"))
+      (node
+        (ref "U2")
+        (pin "6")
+        (pintype "TRISTATE"))
+      (node
+        (ref "U4")
+        (pin "6")
+        (pintype "TRISTATE")))
+    (net
+      (code 12)
+      (name "GP16")
+      (class "Default")
+      (node
+        (ref "J1")
+        (pin "36")
+        (pintype "PASSIVE"))
+      (node
+        (ref "U1")
+        (pin "8")
+        (pintype "TRISTATE"))
+      (node
+        (ref "U3")
+        (pin "8")
+        (pintype "TRISTATE")))
+    (net
+      (code 13)
+      (name "GP17")
+      (class "Default")
+      (node
+        (ref "J1")
+        (pin "11")
+        (pintype "PASSIVE"))
+      (node
+        (ref "U1")
+        (pin "9")
+        (pintype "TRISTATE"))
+      (node
+        (ref "U3")
+        (pin "9")
+        (pintype "TRISTATE")))
+    (net
+      (code 14)
+      (name "GP18")
+      (class "Default")
+      (node
+        (ref "J1")
+        (pin "12")
+        (pintype "PASSIVE"))
+      (node
+        (ref "U2")
+        (pin "2")
+        (pintype "TRISTATE"))
+      (node
+        (ref "U4")
+        (pin "2")
+        (pintype "TRISTATE")))
+    (net
+      (code 15)
+      (name "GP19")
+      (class "Default")
+      (node
+        (ref "J1")
+        (pin "35")
+        (pintype "PASSIVE"))
+      (node
+        (ref "J4")
+        (pin "1")
+        (pintype "PASSIVE")))
+    (net
+      (code 16)
+      (name "GP2")
+      (class "Default")
+      (node
+        (ref "J1")
+        (pin "3")
+        (pintype "PASSIVE"))
+      (node
+        (ref "U1")
+        (pin "4")
+        (pintype "TRISTATE")))
+    (net
+      (code 17)
+      (name "GP20")
+      (class "Default")
+      (node
+        (ref "J1")
+        (pin "38")
+        (pintype "PASSIVE"))
+      (node
+        (ref "J4")
+        (pin "2")
+        (pintype "PASSIVE")))
+    (net
+      (code 18)
+      (name "GP21")
+      (class "Default")
+      (node
+        (ref "J1")
+        (pin "40")
+        (pintype "PASSIVE"))
+      (node
+        (ref "J4")
+        (pin "3")
+        (pintype "PASSIVE")))
+    (net
+      (code 19)
+      (name "GP22")
+      (class "Default")
+      (node
+        (ref "J1")
+        (pin "15")
+        (pintype "PASSIVE"))
+      (node
+        (ref "J4")
+        (pin "4")
+        (pintype "PASSIVE")))
+    (net
+      (code 20)
+      (name "GP26")
+      (class "Default")
+      (node
+        (ref "J1")
+        (pin "37")
+        (pintype "PASSIVE"))
+      (node
+        (ref "J4")
+        (pin "5")
+        (pintype "PASSIVE")))
+    (net
+      (code 21)
+      (name "GP27")
+      (class "Default")
+      (node
+        (ref "J1")
+        (pin "13")
+        (pintype "PASSIVE"))
+      (node
+        (ref "J4")
+        (pin "6")
+        (pintype "PASSIVE")))
+    (net
+      (code 22)
+      (name "GP3")
+      (class "Default")
+      (node
+        (ref "J1")
+        (pin "5")
+        (pintype "PASSIVE"))
+      (node
+        (ref "U1")
+        (pin "5")
+        (pintype "TRISTATE")))
+    (net
+      (code 23)
+      (name "GP4")
+      (class "Default")
+      (node
+        (ref "J1")
+        (pin "8")
+        (pintype "PASSIVE"))
+      (node
+        (ref "U1")
+        (pin "6")
+        (pintype "TRISTATE")))
+    (net
+      (code 24)
+      (name "GP5")
+      (class "Default")
+      (node
+        (ref "J1")
+        (pin "10")
+        (pintype "PASSIVE"))
+      (node
+        (ref "U1")
+        (pin "7")
+        (pintype "TRISTATE")))
+    (net
+      (code 25)
+      (name "GP6")
+      (class "Default")
+      (node
+        (ref "J1")
+        (pin "31")
+        (pintype "PASSIVE"))
+      (node
+        (ref "U3")
+        (pin "2")
+        (pintype "TRISTATE")))
+    (net
+      (code 26)
+      (name "GP7")
+      (class "Default")
+      (node
+        (ref "J1")
+        (pin "26")
+        (pintype "PASSIVE"))
+      (node
+        (ref "U3")
+        (pin "3")
+        (pintype "TRISTATE")))
+    (net
+      (code 27)
+      (name "GP8")
+      (class "Default")
+      (node
+        (ref "J1")
+        (pin "24")
+        (pintype "PASSIVE"))
+      (node
+        (ref "U3")
+        (pin "4")
+        (pintype "TRISTATE")))
+    (net
+      (code 28)
+      (name "GP9")
+      (class "Default")
+      (node
+        (ref "J1")
+        (pin "32")
+        (pintype "PASSIVE"))
+      (node
+        (ref "U3")
+        (pin "5")
+        (pintype "TRISTATE")))
+    (net
+      (code 29)
+      (name "N$1")
+      (class "Default")
+      (node
+        (ref "J2")
+        (pin "1")
+        (pintype "PASSIVE"))
+      (node
+        (ref "U1")
+        (pin "18")
+        (pintype "TRISTATE")))
+    (net
+      (code 30)
+      (name "N$10")
+      (class "Default")
+      (node
+        (ref "J2")
+        (pin "15")
+        (pintype "PASSIVE"))
+      (node
+        (ref "U2")
+        (pin "18")
+        (pintype "TRISTATE")))
+    (net
+      (code 31)
+      (name "N$11")
+      (class "Default")
+      (node
+        (ref "J2")
+        (pin "9")
+        (pintype "PASSIVE"))
+      (node
+        (ref "U2")
+        (pin "17")
+        (pintype "TRISTATE")))
+    (net
+      (code 32)
+      (name "N$12")
+      (class "Default")
+      (node
+        (ref "J2")
+        (pin "10")
+        (pintype "PASSIVE"))
+      (node
+        (ref "U2")
+        (pin "16")
+        (pintype "TRISTATE")))
+    (net
+      (code 33)
+      (name "N$13")
+      (class "Default")
+      (node
+        (ref "J2")
+        (pin "11")
+        (pintype "PASSIVE"))
+      (node
+        (ref "U2")
+        (pin "15")
+        (pintype "TRISTATE")))
+    (net
+      (code 34)
+      (name "N$14")
+      (class "Default")
+      (node
+        (ref "J2")
+        (pin "12")
+        (pintype "PASSIVE"))
+      (node
+        (ref "U2")
+        (pin "14")
+        (pintype "TRISTATE")))
+    (net
+      (code 35)
+      (name "N$15")
+      (class "Default")
+      (node
+        (ref "J3")
+        (pin "1")
+        (pintype "PASSIVE"))
+      (node
+        (ref "U3")
+        (pin "18")
+        (pintype "TRISTATE")))
+    (net
+      (code 36)
+      (name "N$16")
+      (class "Default")
+      (node
+        (ref "J3")
+        (pin "2")
+        (pintype "PASSIVE"))
+      (node
+        (ref "U3")
+        (pin "17")
+        (pintype "TRISTATE")))
+    (net
+      (code 37)
+      (name "N$17")
+      (class "Default")
+      (node
+        (ref "J3")
+        (pin "3")
+        (pintype "PASSIVE"))
+      (node
+        (ref "U3")
+        (pin "16")
+        (pintype "TRISTATE")))
+    (net
+      (code 38)
+      (name "N$18")
+      (class "Default")
+      (node
+        (ref "J3")
+        (pin "5")
+        (pintype "PASSIVE"))
+      (node
+        (ref "U3")
+        (pin "15")
+        (pintype "TRISTATE")))
+    (net
+      (code 39)
+      (name "N$19")
+      (class "Default")
+      (node
+        (ref "J3")
+        (pin "6")
+        (pintype "PASSIVE"))
+      (node
+        (ref "U3")
+        (pin "14")
+        (pintype "TRISTATE")))
+    (net
+      (code 40)
+      (name "N$2")
+      (class "Default")
+      (node
+        (ref "J2")
+        (pin "2")
+        (pintype "PASSIVE"))
+      (node
+        (ref "U1")
+        (pin "17")
+        (pintype "TRISTATE")))
+    (net
+      (code 41)
+      (name "N$20")
+      (class "Default")
+      (node
+        (ref "J3")
+        (pin "7")
+        (pintype "PASSIVE"))
+      (node
+        (ref "U3")
+        (pin "13")
+        (pintype "TRISTATE")))
+    (net
+      (code 42)
+      (name "N$21")
+      (class "Default")
+      (node
+        (ref "R2")
+        (pin "1")
+        (pintype "PASSIVE"))
+      (node
+        (ref "U3")
+        (pin "12")
+        (pintype "TRISTATE")))
+    (net
+      (code 43)
+      (name "N$22")
+      (class "Default")
+      (node
+        (ref "J3")
+        (pin "13")
+        (pintype "PASSIVE"))
+      (node
+        (ref "R2")
+        (pin "2")
+        (pintype "PASSIVE")))
+    (net
+      (code 44)
+      (name "N$23")
+      (class "Default")
+      (node
+        (ref "J3")
+        (pin "14")
+        (pintype "PASSIVE"))
+      (node
+        (ref "U3")
+        (pin "11")
+        (pintype "TRISTATE")))
+    (net
+      (code 45)
+      (name "N$24")
+      (class "Default")
+      (node
+        (ref "J3")
+        (pin "15")
+        (pintype "PASSIVE"))
+      (node
+        (ref "U4")
+        (pin "18")
+        (pintype "TRISTATE")))
+    (net
+      (code 46)
+      (name "N$25")
+      (class "Default")
+      (node
+        (ref "J3")
+        (pin "9")
+        (pintype "PASSIVE"))
+      (node
+        (ref "U4")
+        (pin "17")
+        (pintype "TRISTATE")))
+    (net
+      (code 47)
+      (name "N$26")
+      (class "Default")
+      (node
+        (ref "J3")
+        (pin "10")
+        (pintype "PASSIVE"))
+      (node
+        (ref "U4")
+        (pin "16")
+        (pintype "TRISTATE")))
+    (net
+      (code 48)
+      (name "N$27")
+      (class "Default")
+      (node
+        (ref "J3")
+        (pin "11")
+        (pintype "PASSIVE"))
+      (node
+        (ref "U4")
+        (pin "15")
+        (pintype "TRISTATE")))
+    (net
+      (code 49)
+      (name "N$28")
+      (class "Default")
+      (node
+        (ref "J3")
+        (pin "12")
+        (pintype "PASSIVE"))
+      (node
+        (ref "U4")
+        (pin "14")
+        (pintype "TRISTATE")))
+    (net
+      (code 50)
+      (name "N$3")
+      (class "Default")
+      (node
+        (ref "J2")
+        (pin "3")
+        (pintype "PASSIVE"))
+      (node
+        (ref "U1")
+        (pin "16")
+        (pintype "TRISTATE")))
+    (net
+      (code 51)
+      (name "N$4")
+      (class "Default")
+      (node
+        (ref "J2")
+        (pin "5")
+        (pintype "PASSIVE"))
+      (node
+        (ref "U1")
+        (pin "15")
+        (pintype "TRISTATE")))
+    (net
+      (code 52)
+      (name "N$5")
+      (class "Default")
+      (node
+        (ref "J2")
+        (pin "6")
+        (pintype "PASSIVE"))
+      (node
+        (ref "U1")
+        (pin "14")
+        (pintype "TRISTATE")))
+    (net
+      (code 53)
+      (name "N$6")
+      (class "Default")
+      (node
+        (ref "J2")
+        (pin "7")
+        (pintype "PASSIVE"))
+      (node
+        (ref "U1")
+        (pin "13")
+        (pintype "TRISTATE")))
+    (net
+      (code 54)
+      (name "N$7")
+      (class "Default")
+      (node
+        (ref "R1")
+        (pin "1")
+        (pintype "PASSIVE"))
+      (node
+        (ref "U1")
+        (pin "12")
+        (pintype "TRISTATE")))
+    (net
+      (code 55)
+      (name "N$8")
+      (class "Default")
+      (node
+        (ref "J2")
+        (pin "13")
+        (pintype "PASSIVE"))
+      (node
+        (ref "R1")
+        (pin "2")
+        (pintype "PASSIVE")))
+    (net
+      (code 56)
+      (name "N$9")
+      (class "Default")
+      (node
+        (ref "J2")
+        (pin "14")
+        (pintype "PASSIVE"))
+      (node
+        (ref "U1")
+        (pin "11")
+        (pintype "TRISTATE")))))

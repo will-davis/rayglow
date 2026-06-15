@@ -8,7 +8,7 @@ for the protocol and feature detail.
 
 The desktop feature daemon (`sender.py`, single file): captures the PipeWire monitor of
 the default sink, runs MilkDrop3's exact sound analysis, and unicasts 564-byte v1
-feature packets over UDP at ~60 Hz to the Pi (192.168.2.108:5005). It's a standalone uv
+feature packets over UDP at ~60 Hz to the Pi (192.168.0.50:5005). It's a standalone uv
 project — it shares *no code* with the `rayglow` package, only the packet contract
 mirrored in `rayglow/feed/receiver.py`. The renderer that consumes these packets is
 `rayglow.render` (GLSL on the Pi). `docs/design-history/project-milk-pi.md` is the
@@ -31,8 +31,9 @@ watching the panel.
 ## Architecture and invariants
 
 `sender.py` is a faithful port of MilkDrop3's analysis (`vis_milk2/fft.cpp` +
-`plugin.cpp:8736/8750`; the MilkDrop3 source lives at `~/Projects/MilkDrop3/code/` on the
-desktop). Rules that look like bugs but aren't:
+`plugin.cpp:8736/8750`; cross-reference against a local checkout of the MilkDrop3
+source — https://github.com/milkdrop2077/MilkDrop3). Rules that look like bugs but
+aren't:
 
 - **Replicate the code, not the comments.** MilkDrop's fft.cpp comments recommend octave
   bands; the actual code uses three equal *linear* thirds of the bottom half-spectrum

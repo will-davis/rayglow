@@ -1,23 +1,19 @@
-"""Geometry, hardware, and network config for Milk-Pi.  Single source of truth.
+"""Geometry, hardware, and network config for RayGLow.  Single source of truth.
 
-Everything downstream derives geometry from here — never hardcode 256/32.
+Everything downstream derives geometry from here — never hardcode 256/64.
 """
 
 # ----------------------------------------------------------------------------
-# Panel geometry.  CHAIN is the one knob to change if the 5th panel returns.
+# Panel geometry.  CHAIN is the one knob to change if a panel is added/removed.
 # ----------------------------------------------------------------------------
 ROWS = 32                       # pixels per panel, vertical
 COLS = 64                       # pixels per panel, horizontal
-CHAIN = 4                       # daisy-chained panels (currently 4 = 256 wide)
-PARALLEL = 1
-
-WIDTH = COLS * CHAIN            # logical framebuffer width  (256)
-HEIGHT = ROWS * PARALLEL        # logical framebuffer height (32)
+CHAIN = 4                       # daisy-chained panels per chain (4 = 256 wide)
 
 # ----------------------------------------------------------------------------
-# rp2350b SPI link (Phase 5) — the "full display": two HUB75 chains, row A over
-# row B, driven by the RP2350 firmware instead of hzeller on this host.  The
-# rp2350b owns refresh timing; we just render and ship packed frames over SPI.
+# rp2350b SPI link — the display is two HUB75 chains, row A stacked over row B,
+# driven by the RP2350 firmware.  The rp2350b owns refresh timing; this host
+# just renders and ships packed bit-plane frames over SPI (see render/spi_out).
 # ----------------------------------------------------------------------------
 SPI_PARALLEL = 2                       # two parallel chains (rp2350b drives both)
 SPI_WIDTH = COLS * CHAIN               # 256 (same width as one chain)
@@ -26,40 +22,22 @@ SPI_BITDEPTH = 8                       # BCM planes — must equal firmware B (p
 SPI_GAMMA = 2.1                        # firmware CIE LUT exponent (lut.rs) — packer owns gamma,
                                        # so the render readback must stay LINEAR (gamma 1.0)
 
+# Physical-install orientation (rig-specific — see LOCAL-SETUP). A wall that
+# takes HUB75 data on the RIGHT of each chain, with panels mounted inverted vs
+# the firmware's scan convention, displays the image rotated 180deg from the
+# rendered frame. Flip both axes before packing to compensate. Confirmed with:
+#   python -m rayglow.spi_test --flipv --fliph
+SPI_FLIP_H = True                      # left<->right (HUB75 input side)
+SPI_FLIP_V = True                      # top<->bottom (panel mount vs scan order)
+
 # ----------------------------------------------------------------------------
-# Network (feature packets, project-milk-pi.md §5)
+# Network (feature packets — see docs/design-history/project-milk-pi.md §5)
 # ----------------------------------------------------------------------------
 UDP_HOST = "0.0.0.0"            # listen on all interfaces
-UDP_PORT = 5005                 # note in OPNsense firewall rule if crossing VLANs
+UDP_PORT = 5005                 # add a firewall rule if the feed crosses VLANs/subnets
 
 # ----------------------------------------------------------------------------
 # Rendering
 # ----------------------------------------------------------------------------
-GAMMA = 1.2                     # composite exponent: <1 lifts faint trails, >1 deepens blacks
-WAVE_FIT = 1.0                  # .milk custom-wave vertical mapping: 1.0 squashes the
-                                # preset's ~square canvas onto the panel (everything
-                                # visible, vertically compressed); 0.0 = MilkDrop-faithful
-                                # (only the center 1/8 horizontal slice shows at 8:1)
 FALLBACK_AFTER = 0.5            # seconds without a packet before synth fallback kicks in
-RENDER_CORE = 0                 # pin render thread here; hzeller GPIO thread owns core 3
-
-
-def matrix_options():
-    """Known-good RGBMatrixOptions for the rig (June 2026 tuning).
-
-    Imported lazily so headless mode never touches rgbmatrix.
-    """
-    from rgbmatrix import RGBMatrixOptions
-
-    options = RGBMatrixOptions()
-    options.rows = ROWS
-    options.cols = COLS
-    options.chain_length = CHAIN
-    options.parallel = PARALLEL
-    options.disable_hardware_pulsing = 0           # snd_bcm2835 is blacklisted
-    options.gpio_slowdown = 5                      # tuned: 5 + lsb 130 kills panel-1 artifact
-    options.brightness = 100
-    options.pwm_bits = 10
-    options.pwm_lsb_nanoseconds = 130
-    options.hardware_mapping = "adafruit-hat-pwm"  # GPIO4->GPIO18 jumper installed
-    return options
+RENDER_CORE = 0                # pin the render thread here so frame pacing is steady

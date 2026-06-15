@@ -2,11 +2,6 @@
 
 // iChannel0: milk
 
-// theta replaces iTime: it comes from the Buffer A integrator, which
-// accumulates theta += v * dt (forward Euler) with v steered by the bass.
-// Same anatomy as before — sin(theta * speed) — but now the *rate* of the
-// helix breathes with the music instead of the phase snapping around.
-
 vec4 Line(vec2 uv, float theta, float volamp, float speed, float height, vec3 col) {
     uv.y += S(1., 0., abs(uv.x)) * sin(theta * speed + uv.x * height) * volamp * 0.12;
     return vec4(S(.11 * S(.5, .9, abs(uv.x)), 0., abs(uv.y) - .007) * col, 1.0) * S(1., .3, abs(uv.x));

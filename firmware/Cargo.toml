@@ -1,0 +1,101 @@
+[package]
+name = "rp2350-rgb-driver"
+version = "0.1.0"
+edition = "2021"
+description = "Zero-CPU HUB75 RGB-matrix scan-out engine for the RP2350 (PIO + DMA). Drives 8x 64x32 panels (256x64) over two parallel chains."
+license = "MIT"
+
+# Phase binaries. Each milestone in PROJECT-PLAN.md §8 is an independently
+# flashable, hardware-verifiable target. Phase 0 is the toolchain/boot bring-up.
+[[bin]]
+name = "phase0-blink"
+path = "src/bin/phase0_blink.rs"
+
+# Phase 1: port the kjagiello engine to RP2350, one chain / one 64x32 panel,
+# static gamma-corrected test pattern.
+[[bin]]
+name = "phase1-panel"
+path = "src/bin/phase1_panel.rs"
+
+# Phase 2: widen the data path to two parallel chains (out pins 12, u16 cell).
+# Two single panels, one per chain → 64x64 wall.
+[[bin]]
+name = "phase2-dualchain"
+path = "src/bin/phase2_dualchain.rs"
+
+# Phase 3 (single-chain depth test): one chain of 4 daisy-chained panels =
+# 256x32. Validates signal integrity over a real backplane (§11.7).
+[[bin]]
+name = "phase3-row"
+path = "src/bin/phase3_row.rs"
+
+# Phase 4: bulk frame repack (§5.4) + animated plasma, double-buffered, with
+# fps measurement. Runs on the Phase 2 two-panel 64x64 wall (no new wiring).
+[[bin]]
+name = "phase4-anim"
+path = "src/bin/phase4_anim.rs"
+
+# Phase 5: Pi 5 → RP2350 SPI link (§10). PIO1 SPI-slave RX + DMA straight into
+# the inactive framebuffer; rpi5 streams packed frames (rayglow/render/hub75.py).
+[[bin]]
+name = "phase5-spi"
+path = "src/bin/phase5_spi.rs"
+
+[dependencies]
+# RP2350 HAL. Features:
+#   binary-info          - picotool metadata block (.bi_entries)
+#   critical-section-impl - provides the critical-section impl for the chip
+#   rt                   - runtime / vector table (cortex-m-rt integration)
+#   defmt                - defmt formatting impls for HAL types
+rp235x-hal = { version = "0.4", features = [
+    "binary-info",
+    "critical-section-impl",
+    "rt",
+    "defmt",
+] }
+
+cortex-m = "0.7"
+cortex-m-rt = "0.7"
+embedded-hal = "1.0"
+
+# HUB75 engine deps (Phase 1+): PIO assembler, gamma math, and the
+# embedded-graphics draw API the Display implements.
+pio = "0.3"
+pio-proc = "0.3"
+embedded-graphics = "0.8"
+libm = "0.2"
+
+# Logging over RTT via a debug probe (defmt-rtt), with panics routed through
+# the same channel (panic-probe, formatted with defmt).
+defmt = "0.3"
+defmt-rtt = "0.4"
+panic-probe = { version = "0.3", features = ["print-defmt"] }
+
+# --- Profiles ---------------------------------------------------------------
+# Embedded targets want size/perf and good debuginfo. The PIO/DMA refresh
+# engine (Phase 1+) is timing-sensitive, so we always build with optimizations
+# even in dev; debug-assertions stay on in dev for catching mistakes early.
+
+[profile.dev]
+codegen-units = 1
+debug = 2
+debug-assertions = true
+opt-level = 3            # timing-sensitive even during bring-up; never build the engine at -O0
+overflow-checks = true
+
+[profile.release]
+codegen-units = 1
+debug = 2               # keep symbols for probe-rs/defmt; stripped from flash image anyway
+debug-assertions = false
+lto = "fat"
+opt-level = 3
+overflow-checks = false
+
+# Don't optimize build-time proc-macro/codegen crates: faster clean builds.
+[profile.dev.build-override]
+codegen-units = 8
+opt-level = 0
+
+[profile.release.build-override]
+codegen-units = 8
+opt-level = 0

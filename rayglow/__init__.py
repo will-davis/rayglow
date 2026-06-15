@@ -7,10 +7,9 @@ driven by an audio-feature feed (`rayglow.feed`) sent over UDP from the desktop
 Subpackages:
   rayglow.feed    — the audio-feature protocol: packet receiver, FeatureState,
                     panel/network config.  Shared, renderer-agnostic.
-  rayglow.render  — the live renderer: headless EGL + GLES3 on the Pi's
-                    VideoCore VI, running shaders pasted from shadertoy.com.
-  rayglow.legacy  — the retired MilkDrop-faithful NumPy/OpenCV renderer and
-                    .milk transpiler.  Kept as design reference; not maintained.
+  rayglow.render  — the live renderer: headless EGL + GLES3 on the Pi's GPU,
+                    running shaders pasted from shadertoy.com, then packing each
+                    frame (`hub75`) and shipping it to the RP2350 over SPI.
 
 Keep this module import-light: no GL or numpy at package-import time.
 """

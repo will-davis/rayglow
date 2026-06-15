@@ -5,7 +5,7 @@ Captures the PipeWire monitor of the default sink (whatever the desktop is
 playing), extracts per-frame audio features, and sends 564-byte v1 packets
 over unicast UDP at ~60 Hz to the Pi, which renders on a 256x32 HUB75 matrix.
 
-Receiving end (the `rayglow` package on the Pi 4B at 192.168.2.108; same git
+Receiving end (the `rayglow` package on the Pi 4B at 192.168.0.50; same git
 repo as this file — deployed via clone, not file-sync):
   - rayglow.feed.receiver — the other half of the packet contract (accepts
     v0+v1, nonblocking latest-wins drain)
@@ -17,9 +17,8 @@ repo as this file — deployed via clone, not file-sync):
     reference card in rayglow/render/presets/milk-verbose.glsl) and 'audio'
     (512x2 Shadertoy-style spectrum/waveform rebuilt from this packet's
     wave[128]).
-  - rayglow.legacy — the original MilkDrop-faithful NumPy/OpenCV renderer
-    (this project's first life; still runnable).  rayglow/fake_sender.py is
-    the music-free test harness speaking the same struct.
+  - rayglow/fake_sender.py — the music-free test harness speaking the same
+    struct, for exercising the renderer without audio.
 
 The analysis chain is a faithful port of MilkDrop3's (code/ in the MilkDrop3
 repo).  MilkDrop is no longer the renderer, but its auto-gain semantics —
@@ -49,9 +48,12 @@ field table in this directory's README.md.  (docs/design-history/ holds the
 original project record: the MilkDrop reverse-engineering, the v0 ancestor,
 and the retired renderer.)
 
-Run:  uv run sender.py [--host 192.168.2.108] [--port 5005] [--source NAME]
+Run:  uv run sender.py [--host PI_IP] [--port 5005] [--source NAME]
       uv run sender.py --list-sources
       uv run sender.py --debug          # adds raw (pre-normalization) band prints
+
+The Pi's address comes from --host, else $RAYGLOW_HOST, else the placeholder
+default below — set one of those for your rig (see ../LOCAL-SETUP.example.md).
 """
 import argparse
 import os
@@ -74,8 +76,10 @@ WAVE_SAMPLES = 128
 assert struct.calcsize(PACKET_FMT) == 564
 
 # ---- defaults ----------------------------------------------------------------
-HOST = "192.168.2.108"          # the Pi (IoT VLAN)
-PORT = 5005
+# The Pi's IP. Override per-rig with $RAYGLOW_HOST or --host; the literal here is
+# only a placeholder so the daemon runs out-of-the-box (it won't reach a real Pi).
+HOST = os.environ.get("RAYGLOW_HOST", "192.168.0.50")
+PORT = int(os.environ.get("RAYGLOW_PORT", 5005))
 FPS = 60.0
 
 # ---- MilkDrop sound analysis constants ----------------------------------------
