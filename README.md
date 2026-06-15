@@ -28,29 +28,6 @@ The two halves live in one repo and are kept in sync by **git**, not file-copy: 
 desktop runs `sender/`, the Pi runs the `rayglow` package (deployed by `git pull` +
 `pip install -e`). See [Deploy](#deploy).
 
-## Why this exists / what it is (and isn't)
-
-It began as a from-scratch port of **MilkDrop** (the Winamp visualizer) to the panel —
-hence the packet magic `MILK` and the NumPy/OpenCV renderer now in `rayglow/legacy/`.
-That worked end-to-end, then got retired when it turned out the Pi 4B's VideoCore GPU
-can run real GLSL through a surfaceless EGL context (no X) while the CPU keeps
-bit-banging HUB75. The renderer pivoted to `rayglow.render`, which runs shaders pasted
-unmodified from **shadertoy.com** — instantly unlocking a huge corpus to learn from and
-remix.
-
-So RayGLow is **its own project**, not a fork of either:
-
-- **MilkDrop** → a *ported DSP front-end*. Its sound analysis (`sender.py`) is ported
-  instruction-for-instruction, and its auto-gain semantics ("1.0 = typical for this
-  song right now") turned out to be the right interface for audio-reactive visuals of
-  any kind — every shader is calibrated to them. The *visuals* are no longer MilkDrop's.
-- **Shadertoy** → a *compatibility surface*. `rayglow.render` implements the Shadertoy
-  shader interface (uniform names, `mainImage`, iChannel conventions) so site shaders
-  run unchanged. GLSL ES 3.0 is a Khronos standard; the EGL/VideoCore/hzeller plumbing
-  is all original.
-- **hzeller/rpi-rgb-led-matrix** → the one true runtime *dependency* (the C++/Cython
-  library that drives the panel).
-
 Full credits and licensing in [ATTRIBUTION.md](ATTRIBUTION.md).
 
 ## Why features, not streamed audio
@@ -62,6 +39,9 @@ frame is invisible. The Pi does zero audio work (it's already loaded bit-banging
 the wire carries ~34 KB/s, and UDP gets used the way UDP wants to be used. Unicast, not
 multicast (one receiver; multicast across the User→IoT VLAN boundary would need IGMP
 cooperation for no benefit).
+
+## Hardware
+<img width="1360" height="684" alt="image" src="https://github.com/user-attachments/assets/b08ebad3-693b-420d-9779-64ea5058f1cc" />
 
 ## Repo layout
 
