@@ -20,11 +20,21 @@ one verifiable phase at a time.
 | **4** | Bulk frame repack + animation, double-buffered | ✅ hardware-verified — ~159 fps @ 64×64 (debug) | `phase4-anim` |
 | 3 | Both chains × 4 deep → full 256×64 + coordinate mapper | not started | — |
 | **5** | Pi 5 → RP2350 SPI link (PIO SPI-slave RX + DMA into the inactive FB) | in progress — `phase5_spi.rs` receives 64 KB frames; brought up against the rpi5 `render/spi_out.py` | `phase5-spi` |
+| **X** | **Single-chain** stop-gap: full 256×64 on ONE 8-panel serpentine chain via the spare Adafruit HAT (level-shifter only), SPI-fed | untested — builds; awaiting wiring | `phase-experimental` |
 
 > Note: `phase3-row` (single-chain 256×32) is run *before* the Phase 2 two-chain
 > widening — a deliberate reorder to retire the signal-integrity risk early using
 > the already-assembled panel row. The pixel clock is tunable via `DATA_CLK_DIV`
 > in that binary.
+
+> **Phase X (`phase-experimental`)** is a deliberate *deviation*, not a milestone:
+> it lights the whole wall while the custom two-chain HAT is in fab, using the one
+> Adafruit RGB Matrix HAT as a pure 3.3→5 V buffer and a single U-shaped chain of
+> all eight panels (electrically 512×32, driven as **chain A only**; GP6–11 idle).
+> It reuses the unchanged, verified engine at `W=512`. Cost: the `u16` cell makes
+> the frame **128 KB** (half is the idle chain B) and refresh is ~½ the two-chain
+> wall. The rpi5 must pack with the single-chain serpentine fold (bottom row
+> 180°-rotated) — see the binary's header and `rayglow/render/hub75.py`.
 
 ## Layout
 

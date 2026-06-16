@@ -32,13 +32,14 @@ import time
 
 import numpy as np
 
+from .feed import config
 from .render import hub75
 from .render.spi_out import SpiOut
 
 
 def build_pattern() -> np.ndarray:
     """(64,256,3) uint8, top-left origin (row 0 = top, col 0 = left)."""
-    H, W = hub75.WALL_H, hub75.W   # 64, 256
+    H, W = config.SPI_HEIGHT, config.SPI_WIDTH   # 64, 256 (logical wall)
     f = np.zeros((H, W, 3), np.uint8)
 
     # Vertical blue gradient: dark top -> bright bottom.
@@ -79,9 +80,13 @@ def main() -> int:
     if args.fliph:
         frame = frame[:, ::-1]
     frame = np.ascontiguousarray(frame)
+    # Single-chain rig: fold the logical wall into the 512-wide serpentine strip.
+    # This is the pattern that confirms SPI_CHAIN_ORDER / SPI_ROW_ROTATE_180.
+    if config.SPI_SINGLE_CHAIN:
+        frame = hub75.to_single_chain(frame)
     payload = hub75.pack(frame)
     print(f"spi_test: {frame.shape} -> {len(payload)} bytes, "
-          f"flipv={args.flipv} fliph={args.fliph}")
+          f"flipv={args.flipv} fliph={args.fliph} single_chain={config.SPI_SINGLE_CHAIN}")
 
     out = SpiOut(args.spi_hz, ready_bcm=args.ready_gpio)
     n = 0

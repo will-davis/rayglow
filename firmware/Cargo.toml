@@ -41,6 +41,10 @@ path = "src/bin/phase4_anim.rs"
 name = "phase5-spi"
 path = "src/bin/phase5_spi.rs"
 
+[[bin]]
+name = "phase-experimental"
+path = "src/bin/phase_experimental.rs"
+
 [dependencies]
 # RP2350 HAL. Features:
 #   binary-info          - picotool metadata block (.bi_entries)

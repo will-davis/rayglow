@@ -31,6 +31,26 @@ SPI_FLIP_H = True                      # left<->right (HUB75 input side)
 SPI_FLIP_V = True                      # top<->bottom (panel mount vs scan order)
 
 # ----------------------------------------------------------------------------
+# Single-chain serpentine stop-gap (firmware: phase-experimental). While the
+# custom two-chain HAT is in fab, the whole wall can be driven on ONE daisy-chain
+# of all CHAIN*SPI_PARALLEL panels through the spare Adafruit HAT (used as a pure
+# 3.3->5V level shifter, single output). Electrically that is a 512-wide strip
+# carried on the engine's chain A (chain B left black); the renderer still draws
+# the logical SPI_WIDTH x SPI_HEIGHT wall and render/hub75.to_single_chain folds
+# it into the strip. Frame doubles to 128 KB. Leave False for the two-chain rig.
+# ----------------------------------------------------------------------------
+SPI_SINGLE_CHAIN = False
+# Daisy-chain order of the panels as (panel_row, panel_col); (0,0) = top-left.
+# Default: the HAT plugs into the TOP-RIGHT panel; signal runs right->left across
+# the top row, U-turns down, then left->right across the bottom row.
+SPI_CHAIN_ORDER = [(0, 3), (0, 2), (0, 1), (0, 0),
+                   (1, 0), (1, 1), (1, 2), (1, 3)]
+# Per panel-row 180deg rotation — the serpentine U-turn physically inverts the
+# bottom row, so flip its H and V. Index = panel_row. Confirm against the
+# rayglow.spi_test orientation pattern before trusting it.
+SPI_ROW_ROTATE_180 = [False, True]
+
+# ----------------------------------------------------------------------------
 # Network (feature packets — see docs/design-history/project-milk-pi.md §5)
 # ----------------------------------------------------------------------------
 UDP_HOST = "0.0.0.0"            # listen on all interfaces

@@ -1,60 +1,56 @@
-//! Phase 5 — Pi 5 → RP2350 SPI link (PROJECT-PLAN §8, §10).
+//! Phase EXPERIMENTAL — full 256×64 wall on a **single HUB75 chain** of eight
+//! 64×32 panels, SPI-fed (PROJECT-PLAN §8 deviation; not a numbered phase).
 //!
-//! The rpi5 renders frames (rayglow), packs them into the rp2350b's exact
-//! bit-plane framebuffer layout (`rayglow/render/hub75.py`, proven byte-identical
-//! to `Display::render`), and streams the 64 KB result over SPI. This firmware
-//! receives it with **zero CPU in the ingest path** — a dedicated PIO block +
-//! DMA drop the bytes straight into the inactive framebuffer — mirroring the
-//! zero-CPU refresh engine on the other side. PIO0 stays the HUB75 scan-out
-//! engine; **PIO1 is the SPI receiver**.
+//! ## Why this exists
+//! The production wall is two parallel chains of four panels each, driven through
+//! the custom level-shifting HAT (still in fab). While that PCB ships, this binary
+//! lights the *whole* wall through the **one Adafruit RGB Matrix HAT** on hand,
+//! used purely as a 3.3→5 V buffer (its 74AHCT245, DIR strapped Pi→panel). All
+//! eight panels daisy-chain into ONE electrical chain in a U/serpentine:
 //!
-//! ## Why PIO and not the hardware SPI (PL022)
-//! The PL022 in *slave* mode is limited to peri_clk/12 ≈ 12.5 MHz → a 64 KB
-//! frame takes ~42 ms ≈ 24 fps. Too slow. A PIO SPI-slave sampling loop runs at
-//! the system clock and captures SCLK up to ~sysclk/3–4 (≈ 37–50 MHz @ 150 MHz),
-//! i.e. 60–76 fps for the same frame. So we trade a peripheral for a PIO block
-//! we have to spare (3 PIO blocks; only PIO0 is used by the engine).
+//! ```text
+//!   in →[TR]→[T ]→[T ]→[TL]        top row, signal travels right→left
+//!                          │        U-turn
+//!        [BL]→[B ]→[B ]→[BR]→ out  bottom row, 180°-rotated, travels left→right
+//! ```
 //!
-//! ## Byte-granularity ingest (why there is no endianness puzzle)
-//! The receive program samples MOSI MSB-first and **autopushes every 8 bits**;
-//! the DMA does **byte-size** transfers. Each wire byte therefore lands at the
-//! next framebuffer address in order, so memory ends up byte-for-byte equal to
-//! the packer's stream — no word assembly, no byte-swap, nothing to reconcile.
-//! (A later optimization could use 32-bit words + the DMA `BSWAP` bit for fewer
-//! DMA beats, but byte mode is unambiguous for bring-up.)
+//! ## How it maps onto the (unchanged) two-chain engine
+//! Electrically eight 64-wide panels in series is a **512×32** strip. We drive it
+//! as the engine's **chain A only** (`W = 512`, `H = 32`): wire GP0–5 (R1G1B1
+//! R2G2B2) into the HAT; **GP6–11 (chain B) stay unconnected and output black.**
+//! This is the `phase3-row` degenerate single-chain case (lib.rs §"single-chain
+//! setup"), widened from 256 to 512, with Phase 4's `set_oe_gain` and Phase 5's
+//! zero-CPU SPI ingest folded in. The engine is unchanged and already
+//! hardware-verified — nothing here is new firmware structure, only geometry.
 //!
-//! ## Frame handshake (deterministic bit alignment)
-//! Per frame: firmware arms the RX DMA to the current inactive buffer, restarts
-//! the SM (so its shift counter is 0 → the first SCLK edge is bit 0), then
-//! raises **READY**. The rpi5 waits for READY before asserting CE and clocking
-//! 65536 bytes, then deasserts. The firmware polls the DMA byte count to
-//! completion, lowers READY, and `commit()`s to flip the frame in. Because each
-//! frame restarts the SM, there is no way for bit alignment to drift across
-//! frames even if one is dropped.
+//! ## The cost (read before wiring)
+//!   * **128 KB frame, not 64 KB.** The Phase-2 `u16` cell reserves 6 bits for the
+//!     idle chain B, so `fb_cells(512,32,8)*2 = 131072`. Half the SPI payload is
+//!     zeros. The rpi5 `spidev` bufsiz is already 131072 (one transfer). A future
+//!     `u8` single-chain cell path would reclaim this; not worth it for bring-up.
+//!   * **~½ the two-chain refresh**, because chain A now shifts 512 px/row instead
+//!     of 256 with no parallel chain B to hide behind. Drop `B` to 7/6 if it
+//!     flickers below the ~150 Hz floor.
+//!   * **Signal integrity:** 8 panels in series is 2× the depth `phase3-row`
+//!     verified clean (4 panels @ 37.5 MHz). Start SLOW — `(6,0)` ≈ 12.5 MHz —
+//!     and only ramp once the HAT's '245 buffers + the wall behave. The HAT also
+//!     puts a small RC on CLK (Adafruit's anti-ghosting fix for the Pi); with the
+//!     RP2350's cleaner/faster edges that RC argues for the slow clock too.
 //!
-//! ## Wiring (rp2350b GPIO ↔ rpi5 SPI0)  — reconcile physical header pins with
-//! `pcb/PIZERO-HEADER-PINOUT.md` and the HAT's J4 breakout before soldering.
-//!     rp2350b GP20 (MOSI)  ← rpi5 GPIO10 (SPI0 MOSI, pin 19)
-//!     rp2350b GP21 (SCLK)  ← rpi5 GPIO11 (SPI0 SCLK, pin 23)
-//!     rp2350b GP22 (CS)    ← rpi5 GPIO8  (SPI0 CE0,  pin 24)  ** REQUIRED **
-//!     rp2350b GP26 (READY) → rpi5 GPIO25 (input,     pin 22)
-//!     common GND.  CS frames each transfer; without it the SM parks forever at
-//!     the CS-wait (rx fps stays 0). The rpi5 drives CE0 automatically for
-//!     /dev/spidev0.0 — just wire it. Keep SCLK/MOSI short and, ideally, each
-//!     twisted with its own GND return; a single far-away ground on a flying-wire
-//!     bus rings and can corrupt data mid-frame (CS framing fixes sync, not SI).
+//! ## Wiring — RP2350 GP → Adafruit HAT (adafruit-hat pinout; confirm against
+//! hzeller `lib/hardware-mapping.c` and your HAT revision before soldering):
+//!     GP0 R1  GP1 G1  GP2 B1  GP3 R2  GP4 G2  GP5 B2   (chain A; GP6–11 unused)
+//!     GP12 A  GP13 B  GP14 C  GP15 D   (1:16 scan, 64×32 panels — no E line)
+//!     GP16 CLK  GP17 LAT  GP18 OE
+//! Common all grounds; power panels from the bench 5 V lugs, NOT the HAT terminal.
+//! SPI link pins are unchanged from Phase 5 (see below).
 //!
-//! RP2350 input erratum E9 (§3.2): the SPI inputs are configured **pull-down**
-//! so a floating bus (rpi5 disconnected/idle) can't latch the pad high. External
-//! pulls on the HAT are preferable; the internal pull is the firmware backstop.
-//!
-//! ## Bring-up (no logic analyzer): use the `pico` as a sigrok LA on MOSI/SCLK/
-//! READY at a low SPI clock first; confirm byte order and the READY/CE timing,
-//! then ramp the clock. Until the rpi5 is wired, this binary builds and arms but
-//! will simply wait at READY (no SCLK = no bytes), which is the correct idle.
+//! The rpi5 must pack for this geometry: single-chain serpentine fold (256×64 →
+//! 512×32 electrical, bottom row 180°-rotated) into chain A, chain B left black.
+//! Keep `rayglow/render/hub75.py` + `tools/verify.py` in lockstep with `W=512`.
 //!
 //! Run:
-//!     cargo run --bin phase5-spi
+//!     cargo run --bin phase-experimental
 
 #![no_std]
 #![no_main]
@@ -86,29 +82,33 @@ pub static IMAGE_DEF: hal::block::ImageDef = hal::block::ImageDef::secure_exe();
 pub static PICOTOOL_ENTRIES: [hal::binary_info::EntryAddr; 3] = [
     hal::binary_info::rp_cargo_bin_name!(),
     hal::binary_info::rp_cargo_version!(),
-    hal::binary_info::rp_program_description!(c"RP2350 RGB driver - Phase 5 SPI link"),
+    hal::binary_info::rp_program_description!(c"RP2350 RGB driver - Phase EXPERIMENTAL single-chain 512x32"),
 ];
 
 const XTAL_FREQ_HZ: u32 = 12_000_000;
 
-// Full 256×64 wall (two chains of four 64×32 panels), 8-bit BCM. Must match the
-// host packer's geometry (rayglow/render/hub75.py) and Phase 4.
-const W: usize = 256;
+// Single chain of EIGHT 64×32 panels = 512 px wide × 32 tall electrical strip,
+// driven on chain A only (GP0–5). Chain B (GP6–11) is idle/black. Must match the
+// host packer's single-chain geometry (rayglow/render/hub75.py, W=512).
+const W: usize = 512;
 const H: usize = 32;
 const B: usize = 8;
-// HUB75 pixel clock = sys_clk / (2*div). (2,0)=37.5MHz was clean over ONE chain
-// in Phase 3, but the full two-chain wall on flying-wire jumpers (3.3V direct, no
-// '245 buffers yet) shows down-chain SI on the R1G1B1 lines. (6,0)=12.5MHz to
-// test/mitigate; raise back toward (2,0) once the HAT's level-shifters are in.
-const DATA_CLK_DIV: (u16, u8) = (6, 0); // ~12.5 MHz pixel clock (SI-safe for now)
-const OE_GAIN: u32 = 24; // brightness gain for the wide wall (see Phase 4).
+// HUB75 pixel clock = sys_clk / (2*div). 8 panels in series is 2× the depth
+// phase3-row verified clean at (2,0)=37.5 MHz, AND the Adafruit HAT adds an RC on
+// CLK — so start SLOW and ramp only after the wall behaves. (6,0)=12.5 MHz.
+const DATA_CLK_DIV: (u16, u8) = (6, 0); // ~12.5 MHz pixel clock (SI-safe to start)
+// Brightness gain (Phase 4 §set_oe_gain). 512-wide doubles the per-plane shift
+// window vs 256, so there is MORE dead time to fill — the gain ceiling roughly
+// doubles too (~16 before trading refresh). Start near the Phase-5 value, tune.
+const OE_GAIN: u32 = 24;
 
 // Framebuffer size in BYTES = one SPI frame. fb_cells is u16 count → ×2.
-const FRAME_BYTES: u32 = (hub75::fb_cells(W, H, B) * 2) as u32; // 65536
+// fb_cells(512,32,8) = 65536 → 131072 bytes (128 KB; half is the idle chain B).
+const FRAME_BYTES: u32 = (hub75::fb_cells(W, H, B) * 2) as u32; // 131072
 
-// SPI-link GPIO. MOSI is the PIO IN base; SCLK and CS are sampled with
-// `wait gpio` (absolute), so they are hardcoded in the PIO program below — keep
-// these consts in sync with the literals there.
+// SPI-link GPIO. Unchanged from Phase 5. MOSI is the PIO IN base; SCLK and CS are
+// sampled with `wait gpio` (absolute), so they are hardcoded in the PIO program
+// below — keep these consts in sync with the literals there.
 const MOSI_PIN: u8 = 20;
 const SCLK_PIN: u8 = 21;
 const CS_PIN: u8 = 22; // chip-select (CE0), active low — frame boundary
@@ -165,6 +165,8 @@ fn main() -> ! {
         hub75::Display::new(
             &mut DISPLAY_BUFFER,
             hub75::DisplayPins {
+                // Chain A (GP0–5) → the single physical chain via the Adafruit HAT.
+                // Chain B (GP6–11) is bound but UNCONNECTED — outputs black.
                 rgb: [
                     pins.gpio0.into_function().into_pull_type().into_dyn_pin(),
                     pins.gpio1.into_function().into_pull_type().into_dyn_pin(),
@@ -199,10 +201,9 @@ fn main() -> ! {
     };
     display.set_oe_gain(OE_GAIN);
 
-    // --- SPI-RX pin setup -------------------------------------------------
+    // --- SPI-RX pin setup (unchanged from Phase 5) ------------------------
     // MOSI + SCLK into PIO1 with pull-down (E9 backstop). CS is active-low, so it
-    // gets a pull-UP (idles high between frames). Bind them so the pads stay
-    // configured for the program's lifetime.
+    // gets a pull-UP (idles high between frames).
     let _mosi = pins
         .gpio20
         .into_function::<FunctionPio1>()
@@ -219,17 +220,7 @@ fn main() -> ! {
     let mut ready = pins.gpio26.into_push_pull_output();
     let _ = ready.set_low();
 
-    // --- SPI-RX PIO program (mode 0, CS-framed) ----------------------------
-    // The frame boundary is the chip-select edge, NOT a bit count — this is what
-    // makes reception immune to idle-line noise and handshake jitter. Per frame:
-    //   wait CS high (idle) then CS low (fresh frame start), then sample MOSI on
-    //   each SCLK rising edge, MSB-first, autopush at 8 bits → one byte per FIFO
-    //   entry → byte-size DMA → in-order framebuffer bytes.
-    // `restart()` (called each frame by the CPU) jumps to wrap_target = the CS
-    // preamble and zeroes the shift counter, so every frame re-aligns to a fresh
-    // CS edge with bit 0 = first byte. The CPU may restart while CS is still low
-    // (tail of the previous frame); `wait 1 gpio 22` then catches CS's rising
-    // edge first, so we always lock onto the NEXT frame's falling edge.
+    // --- SPI-RX PIO program (mode 0, CS-framed) — unchanged from Phase 5 ----
     let program = pio::pio_asm!(
         ".wrap_target",
         "wait 1 gpio 22", // CS high  — idle / previous frame ended
@@ -261,7 +252,7 @@ fn main() -> ! {
     let rx_dreq = rx_fifo.dreq_value();
 
     info!(
-        "phase5-spi: {}x{} wall ready. CS-framed SPI-RX on PIO1 (MOSI GP{}, SCLK GP{}, CS GP{}), READY GP{}. frame = {} bytes.",
+        "phase-experimental: {}x{} SINGLE-CHAIN wall (chain A only). CS-framed SPI-RX on PIO1 (MOSI GP{}, SCLK GP{}, CS GP{}), READY GP{}. frame = {} bytes (128 KB; half is idle chain B).",
         W,
         2 * H,
         MOSI_PIN,

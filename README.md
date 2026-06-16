@@ -1,3 +1,7 @@
+
+
+https://github.com/user-attachments/assets/fb1bfaf4-e451-43c7-8cc3-830d7c186d91
+
 # RayGLow
 
 Audio-reactive GLSL visuals on a custom RGB LED wall. Music plays on a desktop; a small
@@ -10,6 +14,7 @@ the music.
 https://github.com/user-attachments/assets/fb1bfaf4-e451-43c7-8cc3-830d7c186d91
 
 ```
+<<<<<<< HEAD
 desktop (PipeWire)                 Raspberry Pi 5                       RP2350 + custom HAT
 ┌──────────────────────┐   UDP    ┌───────────────────────────┐  SPI   ┌───────────────────────┐
 │ music ▶ sink monitor │   5005   │ feed.receiver (latest-win)│ 64 KB  │ phase5_spi: PIO+DMA RX│
@@ -26,6 +31,27 @@ package (deployed by `git pull` + `pip install -e`). The RP2350 half is Rust fir
 (`firmware/`) flashed onto the board, plus a custom level-shifting HAT (`hardware/`).
 First-time setup is in [Deploy](#deploy); full credits and licensing are in
 [ATTRIBUTION.md](ATTRIBUTION.md) (RayGLow is **MIT** — see [LICENSE](LICENSE)).
+=======
+will-desktop (PipeWire)                          raspberry pi 4b (192.168.2.108, IoT VLAN)
+┌─────────────────────────────────────────┐      ┌────────────────────────────────────────┐
+│ music playback ─▶ sink monitor source  │      │ rayglow.feed.receiver  (latest-wins)   │
+│        │                                │ UDP  │        │                               │
+│ sender.py: capture ─▶ FFT ─▶ bands    │ ───▶│ rayglow.feed.features (FeatureState +  │
+│ + AutoGain + sub band + waveform        │ 5005 │        │           synth fallback)     │
+│ ─▶ 564-byte v1 packet @ ~60 Hz         │      │ rayglow.render  GLSL renderer          │
+└─────────────────────────────────────────┘      │   (headless EGL + GLES3 on VideoCore)  │
+                                                 │        │                               │
+                                                 │ hzeller rpi-rgb-led-matrix             │
+                                                 │   4× 64×32 P6 HUB75 = 256×32           │
+                                                 └────────────────────────────────────────┘
+```
+
+The two halves live in one repo and are kept in sync by **git**, not file-copy: the
+desktop runs `sender/`, the Pi runs the `rayglow` package (deployed by `git pull` +
+`pip install -e`). See [Deploy](#deploy).
+
+Full credits and licensing in [ATTRIBUTION.md](ATTRIBUTION.md).
+>>>>>>> origin
 
 ## Why features, not streamed audio
 
@@ -51,6 +77,9 @@ gamma LUT downstream (so the Pi's render readback stays LINEAR).
 A **Waveshare RP2350-PiZero** on a custom HAT that level-shifts (3.3 V → 5 V via
 `SN74AHCT245`) and breaks out two HUB75 chains + the Pi↔RP2350 SPI link. Design files,
 the KiCad project, and fab Gerbers are in [`hardware/`](hardware/).
+
+## Hardware
+<img width="1360" height="684" alt="image" src="https://github.com/user-attachments/assets/b08ebad3-693b-420d-9779-64ea5058f1cc" />
 
 ## Repo layout
 

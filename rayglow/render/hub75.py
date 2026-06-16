@@ -75,21 +75,61 @@ _planes = np.arange(B, dtype=np.uint16)[:, None]
 
 
 def pack(frame: np.ndarray, lut: np.ndarray = _LUT) -> bytes:
-    """Pack a (64, 256, 3) uint8 LINEAR RGB frame into the 64 KB SPI byte stream."""
-    if frame.shape != (WALL_H, W, 3) or frame.dtype != np.uint8:
-        raise ValueError(
-            f"expected ({WALL_H},{W},3) uint8, got {frame.shape} {frame.dtype}"
-        )
+    """Pack a (WALL_H, w, 3) uint8 LINEAR RGB frame into the SPI byte stream.
 
-    g = lut[frame]                       # gamma-correct each channel -> (64,256,3)
+    The chain width `w` is read from the frame, not fixed: 256 for the two-chain
+    wall, 512 for the single-chain serpentine strip (see `to_single_chain`). The
+    per-row geometry (_shift/_addr_row) depends only on height, and the firmware's
+    cell index `addr_row*(w*B) + plane*w + (w-1-x)` is width-parametric, so the
+    same (verified) packer serves both. Output is `w*H/2*B*2` bytes (64 KB at
+    w=256, 128 KB at w=512).
+    """
+    if (frame.ndim != 3 or frame.shape[0] != WALL_H or frame.shape[2] != 3
+            or frame.dtype != np.uint8):
+        raise ValueError(
+            f"expected (WALL_H={WALL_H}, w, 3) uint8, got {frame.shape} {frame.dtype}"
+        )
+    w = frame.shape[1]                   # chain width (256 two-chain, 512 single)
+
+    g = lut[frame]                       # gamma-correct each channel -> (WALL_H,w,3)
     pr, pg, pb = g[..., 0], g[..., 1], g[..., 2]
 
-    fb3d = np.zeros((H // 2, B, W), dtype=np.uint16)
+    fb3d = np.zeros((H // 2, B, w), dtype=np.uint16)
     for y in range(WALL_H):
         rb = (pr[y] >> _planes) & 1
         gb = (pg[y] >> _planes) & 1
         bb = (pb[y] >> _planes) & 1
         packed = ((bb << 2) | (gb << 1) | rb).astype(np.uint16) << _shift[y]
-        fb3d[_addr_row[y], :, ::-1] |= packed   # col = W-1-x
+        fb3d[_addr_row[y], :, ::-1] |= packed   # col = w-1-x
 
     return fb3d.reshape(-1).astype("<u2").tobytes()
+
+
+def to_single_chain(frame: np.ndarray) -> np.ndarray:
+    """Fold the logical wall into the single-chain electrical strip (firmware
+    `phase-experimental`, W=512).
+
+    All CHAIN*SPI_PARALLEL panels run on ONE daisy-chain (the spare Adafruit HAT,
+    single output). Electrically that is a (ROWS, COLS*CHAIN*SPI_PARALLEL) strip
+    carried on the engine's chain A; chain B (the bottom ROWS rows of the returned
+    frame) is left black. Panels are laid into the strip in `config.SPI_CHAIN_ORDER`
+    and rows listed in `config.SPI_ROW_ROTATE_180` are rotated 180deg for the
+    serpentine U-turn (top row right->left, U-turn, bottom row left->right with
+    that row's panels physically inverted).
+
+    Input : (WALL_H, W, 3) uint8 (the logical wall, post mount-orientation flips).
+    Output: (WALL_H, COLS*len(order), 3) uint8 — feed straight to `pack`.
+
+    The exact order/rotation depend on which panel the HAT plugs into and the
+    cabling; confirm with `python -m rayglow.spi_test` (the orientation pattern).
+    """
+    ph, pw = config.ROWS, config.COLS              # 32, 64 (panel height/width)
+    order = config.SPI_CHAIN_ORDER
+    rot = config.SPI_ROW_ROTATE_180
+    elec = np.zeros((2 * ph, len(order) * pw, 3), dtype=frame.dtype)  # (64, 512, 3)
+    for s, (prow, pcol) in enumerate(order):
+        block = frame[prow * ph:(prow + 1) * ph, pcol * pw:(pcol + 1) * pw]
+        if rot[prow]:
+            block = block[::-1, ::-1]              # 180deg = H flip + V flip
+        elec[:ph, s * pw:(s + 1) * pw] = block     # chain A; chain B stays black
+    return np.ascontiguousarray(elec)

@@ -154,13 +154,14 @@ def run_spi(toy, watchers, feed, args):
     handshake self-paces: out.send() blocks until the rp2350b has armed its RX
     DMA, then pushes one 64 KB transfer.
     """
-    from .hub75 import pack
+    from .hub75 import pack, to_single_chain
     from .spi_out import SpiOut
 
     # Warm the full render+pack path before opening hardware (mirrors run_matrix).
     if feed:
         feed.update(0.0, 1.0 / 60)
-    pack(toy.render(0.0, 1.0 / 60, 0))
+    warm = toy.render(0.0, 1.0 / 60, 0)
+    pack(to_single_chain(warm) if config.SPI_SINGLE_CHAIN else warm)
 
     out = SpiOut(args.spi_hz, ready_bcm=args.ready_gpio)
     pin_to_core(config.RENDER_CORE)
@@ -186,9 +187,13 @@ def run_spi(toy, watchers, feed, args):
             if config.SPI_FLIP_H:
                 buf = buf[:, ::-1]
             buf = np.ascontiguousarray(buf)
+            # Single-chain rig: fold the logical wall into the 512-wide serpentine
+            # strip (chain A) before packing. pack() infers the wider frame.
+            if config.SPI_SINGLE_CHAIN:
+                buf = to_single_chain(buf)
             last = now
             frame += 1
-            out.send(pack(buf))           # blocks on READY, one 64 KB SPI transfer
+            out.send(pack(buf))           # blocks on READY, one SPI transfer (64/128 KB)
 
             fps_frames += 1
             if now - fps_t >= 5.0:
