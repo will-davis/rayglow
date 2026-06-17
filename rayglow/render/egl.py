@@ -11,7 +11,7 @@ pointers is how you segfault.  Enum values are standard Khronos constants
 """
 import ctypes
 from ctypes import (POINTER, byref, c_char, c_char_p, c_float, c_int,
-                    c_uint, c_void_p)
+                    c_ssize_t, c_ubyte, c_uint, c_void_p)
 
 _egl = ctypes.CDLL("libEGL.so.1", mode=ctypes.RTLD_GLOBAL)
 _gl = ctypes.CDLL("libGLESv2.so.2", mode=ctypes.RTLD_GLOBAL)
@@ -66,6 +66,11 @@ GL_RENDERER = 0x1F01
 GL_VERSION = 0x1F02
 GL_EXTENSIONS = 0x1F03
 GL_SHADING_LANGUAGE_VERSION = 0x8B8C
+
+# Pixel buffer objects — async glReadPixels (GPU->CPU DMA without a CPU stall).
+GL_PIXEL_PACK_BUFFER = 0x88EB
+GL_STREAM_READ = 0x88E1
+GL_MAP_READ_BIT = 0x0001
 
 # ---------------------------------------------------------------------------
 # Function signatures
@@ -158,6 +163,18 @@ glReadPixels = _bind(_gl, "glReadPixels", None,
                      [c_int, c_int, c_int, c_int, c_uint, c_uint, c_void_p])
 glGetError = _bind(_gl, "glGetError", c_uint, [])
 glGetString = _bind(_gl, "glGetString", c_char_p, [c_uint])
+
+# GL — pixel buffer objects (async readback). glReadPixels into a bound
+# GL_PIXEL_PACK_BUFFER returns immediately (the last arg becomes a byte offset,
+# pass 0); glMapBufferRange then hands back the previous frame's bytes.
+glGenBuffers = _bind(_gl, "glGenBuffers", None, [c_int, POINTER(c_uint)])
+glBindBuffer = _bind(_gl, "glBindBuffer", None, [c_uint, c_uint])
+glBufferData = _bind(_gl, "glBufferData", None,
+                     [c_uint, c_ssize_t, c_void_p, c_uint])
+glMapBufferRange = _bind(_gl, "glMapBufferRange", c_void_p,
+                         [c_uint, c_ssize_t, c_ssize_t, c_uint])
+glUnmapBuffer = _bind(_gl, "glUnmapBuffer", c_ubyte, [c_uint])
+glDeleteBuffers = _bind(_gl, "glDeleteBuffers", None, [c_int, POINTER(c_uint)])
 
 
 # ---------------------------------------------------------------------------

@@ -82,6 +82,17 @@ _half = _yc > (H // 2 - 1)
 _shift = (_chain * 6 + np.where(_half, 3, 0)).astype(np.uint16)
 _planes = np.arange(B, dtype=np.uint16)[:, None]
 
+# Group wall rows by addr_row once. Each addr_row is fed by WALL_H/(H/2) rows whose
+# bit-shifts are disjoint (unique (addr_row, shift) pairs), so pack() can OR-combine
+# them with a single vectorized reduce instead of a per-row Python loop. Stable sort
+# keeps the grouping order deterministic; the assert pins the uniform-grouping invariant.
+_order = np.argsort(_addr_row, kind="stable")
+_n_per = WALL_H // (H // 2)
+assert np.array_equal(
+    _addr_row[_order].reshape(H // 2, _n_per),
+    np.broadcast_to(np.arange(H // 2)[:, None], (H // 2, _n_per)),
+), "pack(): addr_row grouping is not uniform"
+
 
 def pack(frame: np.ndarray, lut: np.ndarray = _LUT) -> bytes:
     """Pack a (WALL_H, w, 3) uint8 LINEAR RGB frame into the TWO-CHAIN u16 stream.
@@ -100,16 +111,16 @@ def pack(frame: np.ndarray, lut: np.ndarray = _LUT) -> bytes:
     w = frame.shape[1]                   # chain width (256 two-chain)
 
     g = lut[frame]                       # gamma-correct each channel -> (WALL_H,w,3)
-    pr, pg, pb = g[..., 0], g[..., 1], g[..., 2]
+    # Bit-planes for every row at once -> (WALL_H, B, w). _planes[None] is (1,B,1).
+    pr, pg, pb = g[..., 0][:, None, :], g[..., 1][:, None, :], g[..., 2][:, None, :]
+    rb = (pr >> _planes[None]) & 1
+    gb = (pg >> _planes[None]) & 1
+    bb = (pb >> _planes[None]) & 1
+    packed = ((bb << 2) | (gb << 1) | rb).astype(np.uint16) << _shift[:, None, None]
+    packed = packed[:, :, ::-1]          # col = w-1-x, applied once
 
-    fb3d = np.zeros((H // 2, B, w), dtype=np.uint16)
-    for y in range(WALL_H):
-        rb = (pr[y] >> _planes) & 1
-        gb = (pg[y] >> _planes) & 1
-        bb = (pb[y] >> _planes) & 1
-        packed = ((bb << 2) | (gb << 1) | rb).astype(np.uint16) << _shift[y]
-        fb3d[_addr_row[y], :, ::-1] |= packed   # col = w-1-x
-
+    # OR-combine the rows that share each addr_row (grouped by _order) in one reduce.
+    fb3d = np.bitwise_or.reduce(packed[_order].reshape(H // 2, _n_per, B, w), axis=1)
     return fb3d.reshape(-1).astype("<u2").tobytes()
 
 
@@ -119,6 +130,14 @@ _yc_s = H - 1 - np.arange(H)
 _addr_s = _yc_s % (H // 2)
 _shift_s = np.where(_yc_s > (H // 2 - 1), 3, 0).astype(np.uint8)
 _planes_s = np.arange(B, dtype=np.uint8)[:, None]
+
+# Same addr_row grouping as the two-chain packer, for pack_single's vectorized reduce.
+_order_s = np.argsort(_addr_s, kind="stable")
+_n_per_s = H // (H // 2)
+assert np.array_equal(
+    _addr_s[_order_s].reshape(H // 2, _n_per_s),
+    np.broadcast_to(np.arange(H // 2)[:, None], (H // 2, _n_per_s)),
+), "pack_single(): addr_row grouping is not uniform"
 
 
 def pack_single(frame: np.ndarray, lut: np.ndarray = _LUT) -> bytes:
@@ -138,16 +157,14 @@ def pack_single(frame: np.ndarray, lut: np.ndarray = _LUT) -> bytes:
     w = frame.shape[1]
 
     g = lut[frame]
-    pr, pg, pb = g[..., 0], g[..., 1], g[..., 2]
+    pr, pg, pb = g[..., 0][:, None, :], g[..., 1][:, None, :], g[..., 2][:, None, :]
+    rb = (pr >> _planes_s[None]) & 1
+    gb = (pg >> _planes_s[None]) & 1
+    bb = (pb >> _planes_s[None]) & 1
+    packed = ((bb << 2) | (gb << 1) | rb).astype(np.uint8) << _shift_s[:, None, None]
+    packed = packed[:, :, ::-1]                 # col = w-1-x, applied once
 
-    fb3d = np.zeros((H // 2, B, w), dtype=np.uint8)
-    for y in range(H):
-        rb = (pr[y] >> _planes_s) & 1
-        gb = (pg[y] >> _planes_s) & 1
-        bb = (pb[y] >> _planes_s) & 1
-        packed = ((bb << 2) | (gb << 1) | rb).astype(np.uint8) << _shift_s[y]
-        fb3d[_addr_s[y], :, ::-1] |= packed     # col = w-1-x
-
+    fb3d = np.bitwise_or.reduce(packed[_order_s].reshape(H // 2, _n_per_s, B, w), axis=1)
     return fb3d.reshape(-1).tobytes()           # u8, contiguous
 
 

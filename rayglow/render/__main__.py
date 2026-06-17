@@ -275,6 +275,9 @@ def main():
     ap.add_argument("--no-listen", action="store_true",
                     help="audio channel: never bind the UDP socket, "
                          "synth fallback only")
+    ap.add_argument("--no-pbo", action="store_true",
+                    help="disable async PBO readback (use the synchronous "
+                         "glReadPixels path; no one-frame latency)")
     args = ap.parse_args()
 
     # Geometry defaults to the full two-chain display (256x64). The render
@@ -292,8 +295,11 @@ def main():
         sys.exit(1)
     print(f"GPU: {ctx.info()}")
 
+    # PBO async readback helps only the live streaming loop; dry-run uses the
+    # synchronous path so the GIF stays frame-exact (no one-frame shift/drop).
+    use_pbo = (args.dry_run is None) and not args.no_pbo
     toy = ShaderToy(args.width, args.height, scale=args.scale,
-                    gamma=args.gamma,
+                    gamma=args.gamma, use_pbo=use_pbo,
                     base_dir=os.path.dirname(os.path.abspath(args.shader)))
     for i in range(4):
         spec = getattr(args, f"channel{i}")

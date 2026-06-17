@@ -33,14 +33,15 @@ class ShaderToy:
     panel-ready (H, W, 3) uint8 numpy array.
     """
 
-    def __init__(self, width, height, scale=4, gamma=1.2, base_dir=None):
+    def __init__(self, width, height, scale=4, gamma=1.2, base_dir=None,
+                 use_pbo=True):
         self.width, self.height, self.scale = width, height, scale
         self.base_dir = base_dir          # directive image paths resolve here
         # Unused samplers bind to this 1x1 black texture so they're valid.
         self.dummy_tex = passes.make_texture(1, 1, bytes(4))
         self.passes = {"image": passes.Pass("image", width * scale,
                                             height * scale, self.dummy_tex)}
-        self.readback = Readback(width, height, scale, gamma)
+        self.readback = Readback(width, height, scale, gamma, use_pbo=use_pbo)
         self.audio_channels = []          # live list; AudioFeed iterates it
         self.buffer_format = passes.pick_buffer_format()
         self._cli_specs = {}              # image-pass overrides {index: spec}
