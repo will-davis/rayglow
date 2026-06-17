@@ -28,7 +28,7 @@
 //! the SM (so its shift counter is 0 → the first SCLK edge is bit 0), then
 //! raises **READY**. The rpi5 waits for READY before asserting CE and clocking
 //! 65536 bytes, then deasserts. The firmware polls the DMA byte count to
-//! completion, lowers READY, and `commit()`s to flip the frame in. Because each
+//! completion, lowers READY, and `flip()`s the frame in. Because each
 //! frame restarts the SM, there is no way for bit alignment to drift across
 //! frames even if one is dropped.
 //!
@@ -100,11 +100,18 @@ const B: usize = 8;
 // in Phase 3, but the full two-chain wall on flying-wire jumpers (3.3V direct, no
 // '245 buffers yet) shows down-chain SI on the R1G1B1 lines. (6,0)=12.5MHz to
 // test/mitigate; raise back toward (2,0) once the HAT's level-shifters are in.
-const DATA_CLK_DIV: (u16, u8) = (6, 0); // ~12.5 MHz pixel clock (SI-safe for now)
-const OE_GAIN: u32 = 24; // brightness gain for the wide wall (see Phase 4).
+const DATA_CLK_DIV: (u16, u8) = (4, 0); // ~12.5 MHz pixel clock (SI-safe for now)
+const OE_GAIN: u32 = 14; // brightness gain for the wide wall (see Phase 4).
 
 // Framebuffer size in BYTES = one SPI frame. fb_cells is u16 count → ×2.
 const FRAME_BYTES: u32 = (hub75::fb_cells(W, H, B) * 2) as u32; // 65536
+
+// Frame-RX stall timeout (see phase_experimental). If the RX DMA byte count starts
+// advancing then stalls this long, the frame is corrupt — drop it and re-arm
+// instead of wedging forever (which would need a reflash on a deployed display).
+// A not-yet-started transfer never trips it; runs only during the idle wait → no
+// steady-state throughput cost.
+const RX_STALL_US: u32 = 50_000; // 50 ms of zero byte progress = dead transfer
 
 // SPI-link GPIO. MOSI is the PIO IN base; SCLK and CS are sampled with
 // `wait gpio` (absolute), so they are hardcoded in the PIO program below — keep
@@ -272,12 +279,17 @@ fn main() -> ! {
     );
 
     let mut frames: u32 = 0;
+    let mut drops: u32 = 0;
     let mut last_us: u32 = timer.get_counter_low();
     let mut sm = rx_sm.start();
 
+    // Stolen handle to the DMA block's global CHAN_ABORT register (recovery only;
+    // distinct from the per-channel regs the engine drives, so aliasing is benign).
+    let dma_regs = unsafe { hal::pac::Peripherals::steal().DMA };
+
     loop {
         // Destination = the buffer not currently on screen. Recompute every
-        // frame (commit swaps the roles).
+        // frame (flip swaps the roles).
         let dst = display.inactive_fb_ptr() as u32;
 
         // Fresh alignment: drain any stale RX byte and restart the SM so its
@@ -290,22 +302,58 @@ fn main() -> ! {
         // Tell the rpi5 we're ready to receive this frame.
         let _ = ready.set_high();
 
-        // Zero-CPU ingest: spin until the DMA has placed all FRAME_BYTES.
-        while rx_busy(&rx_ch) {}
+        // Zero-CPU ingest with a stall watchdog (see RX_STALL_US): any byte-count
+        // progress resets the timer; a started-then-stalled transfer is corrupt, so
+        // abort the channel and drop the frame instead of spinning forever.
+        let mut last_remaining = FRAME_BYTES;
+        let mut progress_us = timer.get_counter_low();
+        let mut dropped = false;
+        while rx_busy(&rx_ch) {
+            let remaining = rx_ch.regs().ch_trans_count().read().bits();
+            if remaining != last_remaining {
+                last_remaining = remaining;
+                progress_us = timer.get_counter_low();
+            } else if remaining < FRAME_BYTES
+                && timer.get_counter_low().wrapping_sub(progress_us) > RX_STALL_US
+            {
+                abort_rx_dma(&dma_regs);
+                dropped = true;
+                break;
+            }
+        }
 
         let _ = ready.set_low();
 
-        // Flip the freshly-received frame onto the wall.
-        display.commit();
+        if dropped {
+            // Partial buffer — keep the last good frame; SM restart + re-arm next
+            // loop resync on the next CS edge.
+            drops = drops.wrapping_add(1);
+        } else {
+            // Show the freshly-received frame. `flip` (not `commit`): the SPI-RX DMA
+            // overwrote the entire inactive buffer, so there is nothing to clear, and
+            // flip avoids commit()'s racy `fb_loop_busy` wait — that poll can miss its
+            // ~1-cycle-per-refresh window and deadlock under this tight streaming
+            // cadence (found bringing up phase-experimental; see Display::flip).
+            display.flip();
+        }
 
         frames += 1;
         let now = timer.get_counter_low();
         if now.wrapping_sub(last_us) >= 1_000_000 {
-            info!("rx fps {}", frames);
+            info!("rx fps {} (drops {})", frames, drops);
             frames = 0;
+            drops = 0;
             last_us = now;
         }
     }
+}
+
+/// Aborts the SPI-RX DMA channel (CH4) via the DMA block's global CHAN_ABORT
+/// register and waits for completion, leaving it idle and safe to re-arm. Used by
+/// the frame-RX stall watchdog to recover from a corrupt/short frame.
+fn abort_rx_dma(dma: &hal::pac::DMA) {
+    dma.chan_abort().write(|w| unsafe { w.bits(1 << 4) }); // CH4
+    while dma.chan_abort().read().bits() != 0 {}
 }
 
 /// (Re)arms the SPI-RX DMA channel for one frame: FIFO → framebuffer, byte-size,

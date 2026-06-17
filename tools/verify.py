@@ -77,6 +77,26 @@ def main() -> int:
         return 1
 
     print(f"  packed frame: {len(golden)} bytes byte-identical ✓")
+
+    # 4. single-chain (u8) packer vs its golden (single::Display1::render)
+    raw_in_s = np.fromfile(GOLDEN / "golden_single_input.bin", dtype=np.uint8)
+    ws = len(raw_in_s) // (fp.H * 3)
+    frame_s = raw_in_s.reshape(fp.H, ws, 3)
+    py_s = fp.pack_single(frame_s)
+    golden_s = (GOLDEN / "golden_single_frame.bin").read_bytes()
+    if len(py_s) != len(golden_s):
+        print(f"SINGLE SIZE MISMATCH: py={len(py_s)} golden={len(golden_s)}")
+        return 1
+    a_s = np.frombuffer(py_s, dtype=np.uint8)
+    b_s = np.frombuffer(golden_s, dtype=np.uint8)
+    if not np.array_equal(a_s, b_s):
+        diff = np.flatnonzero(a_s != b_s)
+        print(f"SINGLE-CHAIN FRAME MISMATCH at {len(diff)}/{len(a_s)} cells: {diff[:16]}")
+        for i in diff[:8]:
+            print(f"  cell {i:5d}: py=0x{a_s[i]:02x} golden=0x{b_s[i]:02x}")
+        return 1
+    print(f"  single-chain frame: {len(golden_s)} bytes byte-identical ✓")
+
     print("\nALL GREEN — wire format locked (rayglow/render/hub75.py == firmware).")
     return 0
 

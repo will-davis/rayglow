@@ -38,8 +38,11 @@ from .render.spi_out import SpiOut
 
 
 def build_pattern() -> np.ndarray:
-    """(64,256,3) uint8, top-left origin (row 0 = top, col 0 = left)."""
-    H, W = config.SPI_HEIGHT, config.SPI_WIDTH   # 64, 256 (logical wall)
+    """(SPI_HEIGHT, SPI_WIDTH, 3) uint8, top-left origin. Geometry-robust: seams
+    are drawn at panel boundaries so it works for any wall size (e.g. the
+    single-chain 256x32 one-row A/B as well as the full 256x64)."""
+    H, W = config.SPI_HEIGHT, config.SPI_WIDTH
+    ph, pw = config.ROWS, config.COLS
     f = np.zeros((H, W, 3), np.uint8)
 
     # Vertical blue gradient: dark top -> bright bottom.
@@ -49,15 +52,17 @@ def build_pattern() -> np.ndarray:
     f[0, :] = f[-1, :] = (0, 120, 0)
     f[:, 0] = f[:, -1] = (0, 120, 0)
 
-    # Panel seams (yellow verticals) + chain seam (magenta horizontal).
-    for x in (64, 128, 192):
+    # Panel seams: yellow verticals at each panel-column boundary, magenta
+    # horizontals at each panel-row boundary (none for a single-row wall).
+    for x in range(pw, W, pw):
         f[:, x] = (120, 120, 0)
-    f[32, :] = (160, 0, 160)
+    for y in range(ph, H, ph):
+        f[y, :] = (160, 0, 160)
 
     # Corner markers (8x8) — orientation key.
-    f[0:8, 0:8] = (255, 255, 255)     # TL white
-    f[0:8, W - 8:W] = (255, 0, 0)     # TR red
-    f[H - 8:H, 0:8] = (0, 255, 0)     # BL green
+    f[0:8, 0:8] = (255, 255, 255)      # TL white
+    f[0:8, W - 8:W] = (255, 0, 0)      # TR red
+    f[H - 8:H, 0:8] = (0, 255, 0)      # BL green
     f[H - 8:H, W - 8:W] = (0, 0, 255)  # BR blue
     return f
 
@@ -80,12 +85,13 @@ def main() -> int:
     if args.fliph:
         frame = frame[:, ::-1]
     frame = np.ascontiguousarray(frame)
-    # Single-chain rig: fold the logical wall into the 512-wide serpentine strip.
-    # This is the pattern that confirms SPI_CHAIN_ORDER / SPI_ROW_ROTATE_180.
+    # Single-chain rig: fold the logical wall into the one-chain strip and pack u8
+    # (this is the pattern that confirms SPI_CHAIN_ORDER / SPI_ROW_ROTATE_180).
     if config.SPI_SINGLE_CHAIN:
-        frame = hub75.to_single_chain(frame)
-    payload = hub75.pack(frame)
-    print(f"spi_test: {frame.shape} -> {len(payload)} bytes, "
+        payload = hub75.pack_single(hub75.to_single_chain(frame))
+    else:
+        payload = hub75.pack(frame)
+    print(f"spi_test: -> {len(payload)} bytes, "
           f"flipv={args.flipv} fliph={args.fliph} single_chain={config.SPI_SINGLE_CHAIN}")
 
     out = SpiOut(args.spi_hz, ready_bcm=args.ready_gpio)

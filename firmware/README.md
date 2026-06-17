@@ -20,7 +20,7 @@ one verifiable phase at a time.
 | **4** | Bulk frame repack + animation, double-buffered | ✅ hardware-verified — ~159 fps @ 64×64 (debug) | `phase4-anim` |
 | 3 | Both chains × 4 deep → full 256×64 + coordinate mapper | not started | — |
 | **5** | Pi 5 → RP2350 SPI link (PIO SPI-slave RX + DMA into the inactive FB) | in progress — `phase5_spi.rs` receives 64 KB frames; brought up against the rpi5 `render/spi_out.py` | `phase5-spi` |
-| **X** | **Single-chain** stop-gap: full 256×64 on ONE 8-panel serpentine chain via the spare Adafruit HAT (level-shifter only), SPI-fed | untested — builds; awaiting wiring | `phase-experimental` |
+| **X** | **Single-chain** stop-gap: full 256×64 on ONE 8-panel serpentine chain via the spare Adafruit HAT (level-shifter only), SPI-fed. Uses the `u8` single-chain engine (`src/single.rs`, `Display1`) — 64 KB frames (not 128), `Display::flip` | ✅ streaming verified; `u8` engine boot-verified (scan-out pending panel recheck) | `phase-experimental` |
 
 > Note: `phase3-row` (single-chain 256×32) is run *before* the Phase 2 two-chain
 > widening — a deliberate reorder to retire the signal-integrity risk early using

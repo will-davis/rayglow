@@ -103,10 +103,52 @@ fn main() {
         f.write_all(&v.to_le_bytes()).unwrap();
     }
 
+    // === Single-chain (u8) golden ==========================================
+    // Verbatim from firmware/src/single.rs Display1::render: one chain, u8 cell,
+    // wall = W × H (no chain dimension). Reference for hub75.py::pack_single.
+    let mut fb1 = vec![0u8; W * H / 2 * B]; // fb_cells(W,H,B) bytes = 32768
+    for y in 0..H {
+        let yc = H - 1 - y; // panel-mount inversion
+        let half = yc > (H / 2) - 1;
+        let shift = if half { 3 } else { 0 };
+        let mask = !(0b111u8 << shift);
+        let row_base = (yc % (H / 2)) * W * B;
+        for x in 0..W {
+            let (r, g, bch) = pixel(x, y);
+            let c_r = lut[r as usize];
+            let c_g = lut[g as usize];
+            let c_b = lut[bch as usize];
+            let base = (W - 1 - x) + row_base;
+            for bp in 0..B {
+                let rgb3 = (((c_b >> bp) & 1) << 2
+                    | ((c_g >> bp) & 1) << 1
+                    | ((c_r >> bp) & 1)) as u8;
+                let packed = rgb3 << shift;
+                let idx = base + bp * W;
+                fb1[idx] = (fb1[idx] & mask) | packed;
+            }
+        }
+    }
+
+    // single-chain input: H × W × 3 (one chain tall)
+    let mut f = File::create("golden_single_input.bin").unwrap();
+    for y in 0..H {
+        for x in 0..W {
+            let (r, g, b) = pixel(x, y);
+            f.write_all(&[r, g, b]).unwrap();
+        }
+    }
+    // single-chain packed framebuffer: u8, W*H/2*B bytes
+    let mut f = File::create("golden_single_frame.bin").unwrap();
+    f.write_all(&fb1).unwrap();
+
     eprintln!(
-        "wrote gamma_lut.bin ({} u16), golden_input.bin ({} bytes), golden_frame.bin ({} bytes)",
+        "wrote gamma_lut.bin ({} u16), golden_input.bin ({} bytes), golden_frame.bin ({} bytes), \
+         golden_single_input.bin ({} bytes), golden_single_frame.bin ({} bytes)",
         lut.len(),
         2 * H * W * 3,
-        fb.len() * 2
+        fb.len() * 2,
+        H * W * 3,
+        fb1.len()
     );
 }

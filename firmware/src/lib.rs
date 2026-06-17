@@ -55,6 +55,9 @@ use rp235x_hal::pio::{
 
 pub mod dma;
 pub mod lut;
+/// Single-chain `u8`-cell engine (half-size frames); two-chain path here is
+/// unaffected. See `single.rs`.
+pub mod single;
 
 /// Number of HUB75 chains driven in parallel by the data SM.
 pub const CHAINS: usize = 2;
@@ -495,6 +498,29 @@ where
             while !self.benchmark && !self.fb_loop_busy() {}
             self.mem.fb1[0..].fill(0);
         }
+    }
+
+    /// Swaps to the freshly-filled inactive buffer **without** `commit`'s
+    /// anti-tear sync or buffer-clear.
+    ///
+    /// `commit` waits on `fb_loop_busy()` (so the engine has latched the new
+    /// frame before the old one is cleared) and then zeroes the old buffer. That
+    /// wait polls a ~1-cycle DMA busy window and, under a tight back-to-back
+    /// commit cadence (e.g. the Phase-5/experimental SPI streaming loop), can
+    /// miss the window and spin forever. `flip` sidesteps both: it only toggles
+    /// the active framebuffer pointer (the refresh DMA re-reads it each frame).
+    ///
+    /// **Only safe when every pixel of the inactive buffer is rewritten each
+    /// frame** — true for the SPI-RX path (the DMA fills all `fb_cells*2` bytes)
+    /// and the bulk [`Display::render`] path. For partial drawing (`set_pixel`)
+    /// use [`Display::commit`], which clears. Worst case here is a one-frame tear
+    /// if the swap lands mid-scan; the buffer still holds a complete frame.
+    pub fn flip(&mut self) {
+        self.mem.fbptr[0] = if self.mem.fbptr[0] == (self.mem.fb0.as_ptr() as u32) {
+            self.mem.fb1.as_ptr() as u32
+        } else {
+            self.mem.fb0.as_ptr() as u32
+        };
     }
 
     /// Paints a wall pixel. Coordinates are 0-indexed; the wall is `W` × `2H`,

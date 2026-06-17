@@ -87,24 +87,39 @@ pub static PICOTOOL_ENTRIES: [hal::binary_info::EntryAddr; 3] = [
 
 const XTAL_FREQ_HZ: u32 = 12_000_000;
 
-// Single chain of EIGHT 64×32 panels = 512 px wide × 32 tall electrical strip,
-// driven on chain A only (GP0–5). Chain B (GP6–11) is idle/black. Must match the
-// host packer's single-chain geometry (rayglow/render/hub75.py, W=512).
-const W: usize = 512;
+// A/B KNOB — panels daisy-chained on the single chain. W = 64 * this.
+//   8 = full wall   (512 wide, 128 KB frame)
+//   4 = one panel row (256 wide, 64 KB frame)  ← for fps/SI A/B testing
+// MUST match the Pi's `len(SPI_CHAIN_ORDER)` (config.py): both sides derive the
+// frame byte-count from it, and the handshake is a FIXED-size contract (the RX
+// DMA waits for exactly FRAME_BYTES) — a mismatch desyncs the link. Reflash to
+// change (W is a compile-time const generic). Chain A only (GP0–5); B idle/black.
+const PANELS_IN_CHAIN: usize = 4;
+const W: usize = 64 * PANELS_IN_CHAIN;
 const H: usize = 32;
 const B: usize = 8;
 // HUB75 pixel clock = sys_clk / (2*div). 8 panels in series is 2× the depth
 // phase3-row verified clean at (2,0)=37.5 MHz, AND the Adafruit HAT adds an RC on
 // CLK — so start SLOW and ramp only after the wall behaves. (6,0)=12.5 MHz.
-const DATA_CLK_DIV: (u16, u8) = (6, 0); // ~12.5 MHz pixel clock (SI-safe to start)
+const DATA_CLK_DIV: (u16, u8) = (3, 0); // ~12.5 MHz pixel clock (SI-safe to start)
 // Brightness gain (Phase 4 §set_oe_gain). 512-wide doubles the per-plane shift
 // window vs 256, so there is MORE dead time to fill — the gain ceiling roughly
 // doubles too (~16 before trading refresh). Start near the Phase-5 value, tune.
-const OE_GAIN: u32 = 24;
+const OE_GAIN: u32 = 64;
 
-// Framebuffer size in BYTES = one SPI frame. fb_cells is u16 count → ×2.
-// fb_cells(512,32,8) = 65536 → 131072 bytes (128 KB; half is the idle chain B).
-const FRAME_BYTES: u32 = (hub75::fb_cells(W, H, B) * 2) as u32; // 131072
+// Framebuffer size in BYTES = one SPI frame. The single-chain engine uses u8
+// cells (1 byte each — no idle chain-B half), so there is NO ×2: fb_cells(512,
+// 32,8) = 65536 = 64 KB for 8 panels; fb_cells(256,32,8) = 32768 = 32 KB for 4.
+// Must match the host packer rayglow/render/hub75.py::pack_single.
+const FRAME_BYTES: u32 = hub75::fb_cells(W, H, B) as u32;
+
+// Frame-RX stall timeout. If the RX DMA's byte count STARTS advancing then stops
+// for this long, the frame is corrupt (SI bit-loss at too-high a clock, or a short
+// send) — drop it and re-arm instead of wedging forever (which previously needed a
+// reflash to clear). A not-yet-started transfer (the Pi still rendering a heavy
+// shader, READY already high) never trips it, and it only runs during the
+// otherwise-idle ingest wait, so it costs no steady-state throughput.
+const RX_STALL_US: u32 = 50_000; // 50 ms with zero byte progress = dead transfer
 
 // SPI-link GPIO. Unchanged from Phase 5. MOSI is the PIO IN base; SCLK and CS are
 // sampled with `wait gpio` (absolute), so they are hardcoded in the PIO program
@@ -116,7 +131,8 @@ const READY_PIN: u8 = 12;
 const _: () = assert!(SCLK_PIN == 21, "PIO `wait gpio 21` must match SCLK_PIN");
 const _: () = assert!(CS_PIN == 22, "PIO `wait gpio 22` must match CS_PIN");
 
-static mut DISPLAY_BUFFER: hub75::DisplayMemory<W, H, B> = hub75::DisplayMemory::new();
+static mut DISPLAY_BUFFER: hub75::single::DisplayMemory1<W, H, B> =
+    hub75::single::DisplayMemory1::new();
 
 #[hal::entry]
 fn main() -> ! {
@@ -162,7 +178,7 @@ fn main() -> ! {
     };
 
     let mut display = unsafe {
-        hub75::Display::new(
+        hub75::single::Display1::new(
             &mut DISPLAY_BUFFER,
             hub75::DisplayPins {
                 // Chain A (GP0–5) → the single physical chain via the Adafruit HAT.
@@ -252,9 +268,9 @@ fn main() -> ! {
     let rx_dreq = rx_fifo.dreq_value();
 
     info!(
-        "phase-experimental: {}x{} SINGLE-CHAIN wall (chain A only). CS-framed SPI-RX on PIO1 (MOSI GP{}, SCLK GP{}, CS GP{}), READY GP{}. frame = {} bytes (128 KB; half is idle chain B).",
+        "phase-experimental: {}x{} SINGLE-CHAIN wall (u8 cells, chain A). CS-framed SPI-RX on PIO1 (MOSI GP{}, SCLK GP{}, CS GP{}), READY GP{}. frame = {} bytes.",
         W,
-        2 * H,
+        H,
         MOSI_PIN,
         SCLK_PIN,
         CS_PIN,
@@ -263,12 +279,18 @@ fn main() -> ! {
     );
 
     let mut frames: u32 = 0;
+    let mut drops: u32 = 0;
     let mut last_us: u32 = timer.get_counter_low();
     let mut sm = rx_sm.start();
 
+    // Stolen handle to the DMA block's global CHAN_ABORT register, used only to
+    // halt a stalled RX channel for recovery. It's a different register from the
+    // per-channel ones the engine drives, so this aliasing is benign.
+    let dma_regs = unsafe { hal::pac::Peripherals::steal().DMA };
+
     loop {
         // Destination = the buffer not currently on screen. Recompute every
-        // frame (commit swaps the roles).
+        // frame (flip swaps the roles).
         let dst = display.inactive_fb_ptr() as u32;
 
         // Fresh alignment: drain any stale RX byte and restart the SM so its
@@ -281,22 +303,60 @@ fn main() -> ! {
         // Tell the rpi5 we're ready to receive this frame.
         let _ = ready.set_high();
 
-        // Zero-CPU ingest: spin until the DMA has placed all FRAME_BYTES.
-        while rx_busy(&rx_ch) {}
+        // Zero-CPU ingest: spin until the DMA has placed all FRAME_BYTES, with a
+        // stall watchdog (see RX_STALL_US). We watch the remaining byte count: any
+        // progress resets the timer; a transfer that has STARTED (count < total)
+        // but then sits unchanged past the timeout is a corrupt/short frame, so we
+        // abort the channel and drop the frame rather than spin forever.
+        let mut last_remaining = FRAME_BYTES;
+        let mut progress_us = timer.get_counter_low();
+        let mut dropped = false;
+        while rx_busy(&rx_ch) {
+            let remaining = rx_ch.regs().ch_trans_count().read().bits();
+            if remaining != last_remaining {
+                last_remaining = remaining;
+                progress_us = timer.get_counter_low();
+            } else if remaining < FRAME_BYTES
+                && timer.get_counter_low().wrapping_sub(progress_us) > RX_STALL_US
+            {
+                abort_rx_dma(&dma_regs);
+                dropped = true;
+                break;
+            }
+        }
 
         let _ = ready.set_low();
 
-        // Flip the freshly-received frame onto the wall.
-        display.commit();
+        if dropped {
+            // Partial buffer — keep the last good frame on screen; the SM restart
+            // + re-arm at the top of the next loop resync on the next CS edge.
+            drops = drops.wrapping_add(1);
+        } else {
+            // Show the freshly-received frame. `flip` (not `commit`): the RX DMA
+            // overwrote the whole inactive buffer, so there is nothing to clear, and
+            // flip avoids commit()'s racy `fb_loop_busy` wait that deadlocks under
+            // this tight streaming cadence (see Display::flip).
+            display.flip();
+        }
 
         frames += 1;
         let now = timer.get_counter_low();
         if now.wrapping_sub(last_us) >= 1_000_000 {
-            info!("rx fps {}", frames);
+            info!("rx fps {} (drops {})", frames, drops);
             frames = 0;
+            drops = 0;
             last_us = now;
         }
     }
+}
+
+/// Aborts the SPI-RX DMA channel (CH4) via the DMA block's global CHAN_ABORT
+/// register and waits for the abort to complete, leaving the channel idle and
+/// safe to re-arm. Used by the frame-RX stall watchdog to recover from a corrupt
+/// or short frame without a reflash.
+fn abort_rx_dma(dma: &hal::pac::DMA) {
+    dma.chan_abort().write(|w| unsafe { w.bits(1 << 4) }); // CH4
+    while dma.chan_abort().read().bits() != 0 {}
 }
 
 /// (Re)arms the SPI-RX DMA channel for one frame: FIFO → framebuffer, byte-size,

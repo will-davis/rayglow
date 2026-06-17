@@ -154,14 +154,17 @@ def run_spi(toy, watchers, feed, args):
     handshake self-paces: out.send() blocks until the rp2350b has armed its RX
     DMA, then pushes one 64 KB transfer.
     """
-    from .hub75 import pack, to_single_chain
+    from .hub75 import pack, pack_single, to_single_chain
     from .spi_out import SpiOut
 
     # Warm the full render+pack path before opening hardware (mirrors run_matrix).
     if feed:
         feed.update(0.0, 1.0 / 60)
     warm = toy.render(0.0, 1.0 / 60, 0)
-    pack(to_single_chain(warm) if config.SPI_SINGLE_CHAIN else warm)
+    if config.SPI_SINGLE_CHAIN:
+        pack_single(to_single_chain(warm))
+    else:
+        pack(warm)
 
     out = SpiOut(args.spi_hz, ready_bcm=args.ready_gpio)
     pin_to_core(config.RENDER_CORE)
@@ -171,6 +174,9 @@ def run_spi(toy, watchers, feed, args):
     last = t0
     fps_frames, fps_t = 0, t0
     frame = 0
+    # Per-stage time accumulators (seconds) for the bottleneck breakdown below.
+    acc_render = acc_pack = acc_send = 0.0
+    last_bytes = 0
     try:
         while True:
             now = time.perf_counter()
@@ -179,6 +185,7 @@ def run_spi(toy, watchers, feed, args):
             maybe_reload(toy, watchers)
             if feed:
                 feed.update(now - t0, now - last)
+            ta = time.perf_counter()
             buf = toy.render(now - t0, now - last, frame)  # (H,W,3) uint8 LINEAR
             # Physical-install orientation (see config): the wall is rotated 180deg
             # from the rendered frame, so flip both axes before packing.
@@ -191,14 +198,34 @@ def run_spi(toy, watchers, feed, args):
             # strip (chain A) before packing. pack() infers the wider frame.
             if config.SPI_SINGLE_CHAIN:
                 buf = to_single_chain(buf)
+            tb = time.perf_counter()
+            payload = pack_single(buf) if config.SPI_SINGLE_CHAIN else pack(buf)
+            tc = time.perf_counter()
+            out.send(payload)             # blocks on READY (firmware/refresh) + clocks bytes
+            td = time.perf_counter()
+            acc_render += tb - ta         # GLSL render + readback + flips + fold
+            acc_pack += tc - tb           # bit-plane packing
+            acc_send += td - tc           # READY wait + SPI byte transfer
+            last_bytes = len(payload)
             last = now
             frame += 1
-            out.send(pack(buf))           # blocks on READY, one SPI transfer (64/128 KB)
 
             fps_frames += 1
             if now - fps_t >= 5.0:
-                print(f"{fps_frames / (now - fps_t):6.1f} fps")
+                n = fps_frames
+                # Theoretical SPI-transfer floor for this frame size+clock: if
+                # `send` ms hugs this, the LINK is the clamp; if `send` >> floor,
+                # the firmware/refresh (READY wait) is; if `render` dominates, the
+                # shader is. `pack` is usually negligible.
+                spi_floor_ms = last_bytes * 8 / args.spi_hz * 1e3
+                print(f"{n / (now - fps_t):6.1f} fps | "
+                      f"render {acc_render / n * 1e3:5.1f}ms  "
+                      f"pack {acc_pack / n * 1e3:4.1f}ms  "
+                      f"send {acc_send / n * 1e3:5.1f}ms "
+                      f"(SPI floor {spi_floor_ms:4.1f}ms @ {args.spi_hz/1e6:.0f}MHz, "
+                      f"{last_bytes//1024}KB)")
                 fps_frames, fps_t = 0, now
+                acc_render = acc_pack = acc_send = 0.0
             # READY paces to the rp2350b's commit; also cap to --fps so we don't
             # render frames nobody asked for.
             sleep = frame_interval - (time.perf_counter() - now)
