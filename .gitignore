@@ -1,6 +1,7 @@
 # Reference material
 .reference/
 *.pdf
+will-notes.md
 
 # Python
 __pycache__/

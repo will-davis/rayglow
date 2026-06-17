@@ -15,7 +15,7 @@ CHAIN = 4                       # daisy-chained panels per chain (4 = 256 wide)
 # driven by the RP2350 firmware.  The rp2350b owns refresh timing; this host
 # just renders and ships packed bit-plane frames over SPI (see render/spi_out).
 # ----------------------------------------------------------------------------
-SPI_PARALLEL = 2                       # two parallel chains (rp2350b drives both)
+SPI_PARALLEL = 1                       # two parallel chains (rp2350b drives both)
 SPI_WIDTH = COLS * CHAIN               # 256 (same width as one chain)
 SPI_HEIGHT = ROWS * SPI_PARALLEL       # 64 (two stacked 32-row chains)
 SPI_BITDEPTH = 8                       # BCM planes — must equal firmware B (phase5_spi.rs)
@@ -27,8 +27,8 @@ SPI_GAMMA = 2.1                        # firmware CIE LUT exponent (lut.rs) — 
 # the firmware's scan convention, displays the image rotated 180deg from the
 # rendered frame. Flip both axes before packing to compensate. Confirmed with:
 #   python -m rayglow.spi_test --flipv --fliph
-SPI_FLIP_H = True                      # left<->right (HUB75 input side)
-SPI_FLIP_V = True                      # top<->bottom (panel mount vs scan order)
+SPI_FLIP_H = False                      # left<->right (HUB75 input side)
+SPI_FLIP_V = False                      # top<->bottom (panel mount vs scan order)
 
 # ----------------------------------------------------------------------------
 # Single-chain serpentine stop-gap (firmware: phase-experimental). While the
@@ -39,16 +39,17 @@ SPI_FLIP_V = True                      # top<->bottom (panel mount vs scan order
 # the logical SPI_WIDTH x SPI_HEIGHT wall and render/hub75.to_single_chain folds
 # it into the strip. Frame doubles to 128 KB. Leave False for the two-chain rig.
 # ----------------------------------------------------------------------------
-SPI_SINGLE_CHAIN = False
+SPI_SINGLE_CHAIN = True
 # Daisy-chain order of the panels as (panel_row, panel_col); (0,0) = top-left.
 # Default: the HAT plugs into the TOP-RIGHT panel; signal runs right->left across
 # the top row, U-turns down, then left->right across the bottom row.
-SPI_CHAIN_ORDER = [(0, 3), (0, 2), (0, 1), (0, 0),
-                   (1, 0), (1, 1), (1, 2), (1, 3)]
+SPI_CHAIN_ORDER = [(0, 3), (0, 2), (0, 1), (0, 0)]
+# SPI_CHAIN_ORDER = [(0, 3), (0, 2), (0, 1), (0, 0),
+#                    (1, 0), (1, 1), (1, 2), (1, 3)]
 # Per panel-row 180deg rotation — the serpentine U-turn physically inverts the
 # bottom row, so flip its H and V. Index = panel_row. Confirm against the
 # rayglow.spi_test orientation pattern before trusting it.
-SPI_ROW_ROTATE_180 = [False, True]
+SPI_ROW_ROTATE_180 = [True, True]
 
 # ----------------------------------------------------------------------------
 # Network (feature packets — see docs/design-history/project-milk-pi.md §5)
