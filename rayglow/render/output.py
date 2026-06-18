@@ -20,15 +20,18 @@ class Readback:
     samples * 255 max) on the *contiguous* RGBA buffer and apply gamma via a
     precomputed LUT indexed by that sum — exact and ~10x faster.
 
-    `use_pbo` (default on) double-buffers the readback through two pixel-pack
-    buffer objects: glReadPixels into PBO[cur] returns immediately (async GPU
-    DMA, no CPU stall), and we map PBO[other] holding *last* frame's pixels.
-    Costs one frame of latency (fine for a visualizer); the first call returns
-    a black frame to prime the pipeline. Set use_pbo=False for the exact,
-    zero-latency synchronous path (used by dry-run so the GIF stays frame-exact).
+    `use_pbo` double-buffers the readback through two pixel-pack buffer objects:
+    glReadPixels into PBO[cur] returns immediately, then we map PBO[other]
+    holding *last* frame's pixels (one frame of latency; first call returns a
+    black prime frame). This is a DISCRETE-GPU optimization and is **off by
+    default** because it measured ~2.5-5ms SLOWER on the Pi's V3D: unified memory
+    means glReadPixels isn't a bus stall to hide, and the box-sum then streams
+    the supersampled frame out of the *uncached* mapped buffer (vs the cached
+    numpy buffer the sync path fills). Kept behind `--pbo` for provenance / other
+    GPUs. The synchronous path is the default and the faster one here.
     """
 
-    def __init__(self, width, height, scale, gamma, use_pbo=True):
+    def __init__(self, width, height, scale, gamma, use_pbo=False):
         if not 1 <= scale <= 16:
             raise ValueError("scale must be in 1..16")
         self.w, self.h, self.scale = width, height, scale

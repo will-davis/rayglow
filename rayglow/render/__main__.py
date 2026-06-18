@@ -36,6 +36,7 @@ import argparse
 import os
 import re
 import sys
+import threading
 import time
 
 import numpy as np
@@ -145,6 +146,65 @@ def run_dry(toy, feed, args):
     sys.exit(0 if ok else 1)
 
 
+class _SendPipe:
+    """Background SPI sender that overlaps frame N's transfer with frame N+1's
+    render. `out.send()` blocks for the SPI floor + READY wait (~8 ms); running
+    it on a worker thread lets the main thread render+pack the next frame
+    meanwhile, so the loop cadence becomes max(render+pack, send) instead of
+    their sum. Depth-1 (one frame in flight) keeps the added latency to a single
+    frame. Only the worker touches `out`, so the SPI/GPIO objects stay
+    single-threaded. The GIL is released during the spidev write and READY wait,
+    so the overlap is real.
+    """
+
+    def __init__(self, out):
+        self._out = out
+        self._payload = None
+        self._work = threading.Event()    # main -> worker: a payload is ready
+        self._idle = threading.Event()    # worker -> main: previous send done
+        self._idle.set()                  # start idle
+        self._stop = False
+        self._exc = None
+        self.acc_send = 0.0               # worker: cumulative transfer seconds
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def _run(self):
+        while True:
+            self._work.wait()
+            self._work.clear()
+            if self._stop:
+                return
+            try:
+                t = time.perf_counter()
+                self._out.send(self._payload)
+                self.acc_send += time.perf_counter() - t
+            except BaseException as e:    # surface to main on next submit()
+                self._exc = e
+            self._idle.set()
+
+    def submit(self, payload):
+        """Block until the previous send finishes (the residual send-bound
+        stall), hand off `payload`, and return that wait time in seconds. The
+        worker transfers it while the caller renders the next frame."""
+        t = time.perf_counter()
+        self._idle.wait()
+        wait = time.perf_counter() - t
+        if self._exc is not None:
+            raise self._exc
+        self._idle.clear()
+        self._payload = payload
+        self._work.set()
+        return wait
+
+    def close(self):
+        self._idle.wait()
+        self._stop = True
+        self._work.set()
+        self._thread.join(timeout=2.0)
+        self._out.close()
+
+
 def run_spi(toy, watchers, feed, args):
     """Render + pack + ship frames to the rp2350b over SPI (the only output).
 
@@ -155,7 +215,6 @@ def run_spi(toy, watchers, feed, args):
     DMA, then pushes one 64 KB transfer.
     """
     from .hub75 import pack, pack_single, to_single_chain
-    from .spi_out import SpiOut
 
     # Warm the full render+pack path before opening hardware (mirrors run_matrix).
     if feed:
@@ -166,7 +225,18 @@ def run_spi(toy, watchers, feed, args):
     else:
         pack(warm)
 
-    out = SpiOut(args.spi_hz, ready_bcm=args.ready_gpio)
+    # Transport: the 1-lane SPI link (default) or the 8-lane RP1-PIO parallel bus.
+    # Both expose send(bytes)/close(); the byte stream is identical either way.
+    if args.transport == "pio":
+        from .pio_out import PioOut
+        out = PioOut(clkdiv=args.pio_clkdiv, ready_bcm=args.ready_gpio,
+                     nibble_swap=not args.pio_no_nibble_swap)
+    else:
+        from .spi_out import SpiOut
+        out = SpiOut(args.spi_hz, ready_bcm=args.ready_gpio)
+    # Build the send worker BEFORE pinning, so it inherits the full-core affinity
+    # and floats onto an idle core; pin_to_core then pins only the render thread.
+    pipe = _SendPipe(out)
     pin_to_core(config.RENDER_CORE)
 
     frame_interval = 1.0 / args.fps
@@ -174,8 +244,12 @@ def run_spi(toy, watchers, feed, args):
     last = t0
     fps_frames, fps_t = 0, t0
     frame = 0
-    # Per-stage time accumulators (seconds) for the bottleneck breakdown below.
-    acc_render = acc_pack = acc_send = 0.0
+    # Per-stage accumulators. render+pack run on this thread; the SPI transfer
+    # runs on the worker (pipe.acc_send). `acc_wait` is how long this thread
+    # blocks waiting for the previous transfer — the residual send-bound stall
+    # AFTER overlap (≈0 => the link is fully hidden behind render).
+    acc_render = acc_pack = acc_wait = 0.0
+    pipe.acc_send = 0.0
     last_bytes = 0
     try:
         while True:
@@ -201,11 +275,12 @@ def run_spi(toy, watchers, feed, args):
             tb = time.perf_counter()
             payload = pack_single(buf) if config.SPI_SINGLE_CHAIN else pack(buf)
             tc = time.perf_counter()
-            out.send(payload)             # blocks on READY (firmware/refresh) + clocks bytes
-            td = time.perf_counter()
+            # Hand the frame to the worker; it transfers while we render the next.
+            # submit() blocks only if the previous transfer hasn't finished.
+            wait = pipe.submit(payload)   # fresh immutable bytes => no aliasing
             acc_render += tb - ta         # GLSL render + readback + flips + fold
             acc_pack += tc - tb           # bit-plane packing
-            acc_send += td - tc           # READY wait + SPI byte transfer
+            acc_wait += wait              # stall on the previous send (overlap residue)
             last_bytes = len(payload)
             last = now
             frame += 1
@@ -213,28 +288,35 @@ def run_spi(toy, watchers, feed, args):
             fps_frames += 1
             if now - fps_t >= 5.0:
                 n = fps_frames
-                # Theoretical SPI-transfer floor for this frame size+clock: if
-                # `send` ms hugs this, the LINK is the clamp; if `send` >> floor,
-                # the firmware/refresh (READY wait) is; if `render` dominates, the
-                # shader is. `pack` is usually negligible.
-                spi_floor_ms = last_bytes * 8 / args.spi_hz * 1e3
+                # send = the worker's actual transfer time (link cost); wait =
+                # how much it leaked into the critical path. If wait hugs 0 the
+                # link is fully hidden and `render` is the clamp; if wait ~ send,
+                # the link still paces. SPI floor is the theoretical transfer min.
+                if args.transport == "pio":
+                    # 8 lanes, 1 byte/clock, 2 SM cycles/byte off RP1's 200 MHz.
+                    floor_ms = last_bytes / (200e6 / (2 * args.pio_clkdiv)) * 1e3
+                    link = f"PIO floor {floor_ms:4.1f}ms @ clkdiv {args.pio_clkdiv:g}"
+                else:
+                    floor_ms = last_bytes * 8 / args.spi_hz * 1e3
+                    link = f"SPI floor {floor_ms:4.1f}ms @ {args.spi_hz/1e6:.0f}MHz"
+                send_ms = pipe.acc_send / n * 1e3
                 print(f"{n / (now - fps_t):6.1f} fps | "
                       f"render {acc_render / n * 1e3:5.1f}ms  "
                       f"pack {acc_pack / n * 1e3:4.1f}ms  "
-                      f"send {acc_send / n * 1e3:5.1f}ms "
-                      f"(SPI floor {spi_floor_ms:4.1f}ms @ {args.spi_hz/1e6:.0f}MHz, "
-                      f"{last_bytes//1024}KB)")
+                      f"send {send_ms:5.1f}ms  wait {acc_wait / n * 1e3:5.1f}ms "
+                      f"({link}, {last_bytes//1024}KB)")
                 fps_frames, fps_t = 0, now
-                acc_render = acc_pack = acc_send = 0.0
-            # READY paces to the rp2350b's commit; also cap to --fps so we don't
-            # render frames nobody asked for.
+                acc_render = acc_pack = acc_wait = 0.0
+                pipe.acc_send = 0.0
+            # Cap to --fps so we don't render frames nobody asked for (the worker
+            # + READY handshake otherwise self-pace to the rp2350b).
             sleep = frame_interval - (time.perf_counter() - now)
             if sleep > 0:
                 time.sleep(sleep)
     except KeyboardInterrupt:
         pass
     finally:
-        out.close()
+        pipe.close()
 
 
 def main():
@@ -251,8 +333,19 @@ def main():
                     help="readback gamma (default 1.0 = LINEAR; the rp2350b "
                          "firmware applies the CIE LUT, so correcting here too "
                          "would double-correct)")
+    ap.add_argument("--transport", choices=("spi", "pio"), default="spi",
+                    help="link to the rp2350b: 'spi' (1-lane, proven default) or "
+                         "'pio' (8-lane RP1-PIO parallel bus — needs phase6 "
+                         "firmware + piobridge/libpioshim.so)")
     ap.add_argument("--spi-hz", type=int, default=24_000_000,
-                    help="SPI clock in Hz (start low, then ramp)")
+                    help="SPI clock in Hz (--transport spi; start low, then ramp)")
+    ap.add_argument("--pio-clkdiv", type=float, default=4.0,
+                    help="RP1-PIO clock divisor (--transport pio); per-lane rate "
+                         "≈ 200MHz/(2*div). Start high (slow), then lower")
+    ap.add_argument("--pio-no-nibble-swap", action="store_true",
+                    help="(--transport pio) disable the per-byte nibble swap — "
+                         "use only if the logic analyzer shows nibbles arriving "
+                         "un-swapped")
     ap.add_argument("--ready-gpio", type=int, default=25,
                     help="BCM pin reading the rp2350b READY line")
     ap.add_argument("--duration", type=float, default=0.0,
@@ -275,9 +368,9 @@ def main():
     ap.add_argument("--no-listen", action="store_true",
                     help="audio channel: never bind the UDP socket, "
                          "synth fallback only")
-    ap.add_argument("--no-pbo", action="store_true",
-                    help="disable async PBO readback (use the synchronous "
-                         "glReadPixels path; no one-frame latency)")
+    ap.add_argument("--pbo", action="store_true",
+                    help="async PBO readback (experimental; measured SLOWER on "
+                         "the Pi's V3D — default is the synchronous path)")
     args = ap.parse_args()
 
     # Geometry defaults to the full two-chain display (256x64). The render
@@ -295,9 +388,10 @@ def main():
         sys.exit(1)
     print(f"GPU: {ctx.info()}")
 
-    # PBO async readback helps only the live streaming loop; dry-run uses the
-    # synchronous path so the GIF stays frame-exact (no one-frame shift/drop).
-    use_pbo = (args.dry_run is None) and not args.no_pbo
+    # PBO async readback is experimental and off by default (slower on V3D, see
+    # output.Readback); only ever for the live loop, never dry-run (the one-frame
+    # shift/drop would skew the GIF).
+    use_pbo = (args.dry_run is None) and args.pbo
     toy = ShaderToy(args.width, args.height, scale=args.scale,
                     gamma=args.gamma, use_pbo=use_pbo,
                     base_dir=os.path.dirname(os.path.abspath(args.shader)))

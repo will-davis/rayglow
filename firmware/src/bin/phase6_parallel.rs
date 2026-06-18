@@ -1,56 +1,50 @@
-//! Phase EXPERIMENTAL — full 256×64 wall on a **single HUB75 chain** of eight
-//! 64×32 panels, SPI-fed (PROJECT-PLAN §8 deviation; not a numbered phase).
+//! Phase 6 — Pi 5 → RP2350 **4-lane parallel** link (Workstream 3).
 //!
-//! ## Why this exists
-//! The production wall is two parallel chains of four panels each, driven through
-//! the custom level-shifting HAT (still in fab). While that PCB ships, this binary
-//! lights the *whole* wall through the **one Adafruit RGB Matrix HAT** on hand,
-//! used purely as a 3.3→5 V buffer (its 74AHCT245, DIR strapped Pi→panel). All
-//! eight panels daisy-chain into ONE electrical chain in a U/serpentine:
+//! A widened sibling of `phase_experimental`: identical single-chain scan-out
+//! engine, identical CS-framing + READY handshake, identical RX DMA + framebuffer
+//! drop — the ONLY change is the ingest data path. Phase 5 / experimental clock
+//! one MOSI bit per SCLK edge (8 edges/byte); this clocks **4 data lanes per edge
+//! = a nibble per edge, 2 edges/byte**, fed by the Pi 5's RP1 PIO block.
 //!
-//! ```text
-//!   in →[TR]→[T ]→[T ]→[TL]        top row, signal travels right→left
-//!                          │        U-turn
-//!        [BL]→[B ]→[B ]→[BR]→ out  bottom row, 180°-rotated, travels left→right
-//! ```
+//! ## Why 4 lanes (not 8)
+//! The board exposes GP0–27 only. The scan-out engine owns GP0–18, leaving GP19–27
+//! (9 pins) for the link; 8 data lanes + DCLK + CS + READY = 11 won't fit. 4 lanes
+//! (4 data + 3 control = 7) fits with room, divides a byte cleanly (2 nibbles), and
+//! still lifts the link off the critical path: at the Pi's clkdiv 2 that's
+//! 4×50 MHz = 200 Mbit/s → a 32 KB frame in ~1.3 ms (vs ~6.6 ms over 40 MHz SPI).
 //!
-//! ## How it maps onto the (unchanged) two-chain engine
-//! Electrically eight 64-wide panels in series is a **512×32** strip. We drive it
-//! as the engine's **chain A only** (`W = 512`, `H = 32`): wire GP0–5 (R1G1B1
-//! R2G2B2) into the HAT; **GP6–11 (chain B) stay unconnected and output black.**
-//! This is the `phase3-row` degenerate single-chain case (lib.rs §"single-chain
-//! setup"), widened from 256 to 512, with Phase 4's `set_oe_gain` and Phase 5's
-//! zero-CPU SPI ingest folded in. The engine is unchanged and already
-//! hardware-verified — nothing here is new firmware structure, only geometry.
+//! ## Byte order (why the stream stays byte-identical)
+//! `in pins, 4` samples lanes DATA0..3 = one nibble; autopush at 8 = two samples
+//! per byte. RX shifts **left** (like the proven single-lane path) so the byte
+//! lands in ISR[7:0] where the byte-size DMA reads it — first nibble sampled →
+//! HIGH nibble. So the Pi must send the HIGH nibble of each byte first: it does a
+//! cheap per-byte nibble-swap then `out pins, 4` shift-right (autopull 32, byte
+//! order preserved). Net: the framebuffer ends byte-identical to
+//! `hub75.py::pack_single`. **Validate on a logic analyzer first** with a
+//! 0x00,0x01,0x02… ramp: if every byte's nibbles are swapped, toggle the Pi's
+//! `nibble_swap` (PioOut); if bits within a nibble mirror, reverse the lane
+//! wiring. (This ordering can't be proven from the desk.)
 //!
-//! ## The cost (read before wiring)
-//!   * **64 KB frame at 8 panels (32 KB at 4).** This path uses the single-chain
-//!     `u8` cell (`hub75::single`): one byte per (col, plane, addr-row), no idle
-//!     chain-B half, so `fb_cells(512,32,8) = 65536` — the two-chain `×2` is gone.
-//!     The rpi5 `spidev` bufsiz (131072) covers it in one transfer.
-//!   * **~½ the two-chain refresh**, because chain A now shifts 512 px/row instead
-//!     of 256 with no parallel chain B to hide behind. Drop `B` to 7/6 if it
-//!     flickers below the ~150 Hz floor.
-//!   * **Signal integrity:** 8 panels in series is 2× the depth `phase3-row`
-//!     verified clean (4 panels @ 37.5 MHz). Start SLOW — `(6,0)` ≈ 12.5 MHz —
-//!     and only ramp once the HAT's '245 buffers + the wall behave. The HAT also
-//!     puts a small RC on CLK (Adafruit's anti-ghosting fix for the Pi); with the
-//!     RP2350's cleaner/faster edges that RC argues for the slow clock too.
+//! ## Pin map  (RP2350b GP ↔ rpi5 BCM ↔ signal)
+//!     DATA0..3  GP20..GP23   ← rpi5 GPIO12..GPIO15   (4 lanes, IN base = GP20)
+//!     DCLK      GP24         ← rpi5 GPIO20           (Pi-driven data clock)
+//!     CS        GP25         ← rpi5 GPIO21           (active-low frame boundary)
+//!     READY     GP26         → rpi5 GPIO25 (input)   (RP2350 → Pi: armed)
+//!     common GND (a return beside the lane bundle; keep short — lanes at speed on
+//!     flying wire ring badly). GP19 + GP27 are spare.
+//! Scan-out engine pins are unchanged (GP0–18). DATA0..3 must stay CONTIGUOUS
+//! (the `in pins, 4` group); DCLK/CS are read by absolute `wait gpio` so they are
+//! hardcoded in the PIO program below — keep the consts in sync with the literals.
 //!
-//! ## Wiring — RP2350 GP → Adafruit HAT (adafruit-hat pinout; confirm against
-//! hzeller `lib/hardware-mapping.c` and your HAT revision before soldering):
-//!     GP0 R1  GP1 G1  GP2 B1  GP3 R2  GP4 G2  GP5 B2   (chain A; GP6–11 unused)
-//!     GP12 A  GP13 B  GP14 C  GP15 D   (1:16 scan, 64×32 panels — no E line)
-//!     GP16 CLK  GP17 LAT  GP18 OE
-//! Common all grounds; power panels from the bench 5 V lugs, NOT the HAT terminal.
-//! SPI link pins are unchanged from Phase 5 (see below).
-//!
-//! The rpi5 must pack for this geometry: single-chain serpentine fold (256×64 →
-//! 512×32 electrical, bottom row 180°-rotated) into chain A, chain B left black.
-//! Keep `rayglow/render/hub75.py` + `tools/verify.py` in lockstep with `W=512`.
+//! ## Two-chain swap (when the custom HAT lands)
+//! This binary is single-chain (`hub75::single`, u8 cells) to match the current
+//! rig. The parallel RX here is chain-agnostic; to drive the two-chain wall, change
+//! only the three marked SINGLE-CHAIN lines (Display1→Display, DisplayMemory1→
+//! DisplayMemory, FRAME_BYTES ×2) exactly as `phase5_spi` differs from
+//! `phase_experimental`, and pack with `pack()` instead of `pack_single()`.
 //!
 //! Run:
-//!     cargo run --bin phase-experimental
+//!     cargo run --bin phase6-parallel
 
 #![no_std]
 #![no_main]
@@ -82,7 +76,7 @@ pub static IMAGE_DEF: hal::block::ImageDef = hal::block::ImageDef::secure_exe();
 pub static PICOTOOL_ENTRIES: [hal::binary_info::EntryAddr; 3] = [
     hal::binary_info::rp_cargo_bin_name!(),
     hal::binary_info::rp_cargo_version!(),
-    hal::binary_info::rp_program_description!(c"RP2350 RGB driver - Phase EXPERIMENTAL single-chain 512x32"),
+    hal::binary_info::rp_program_description!(c"RP2350 RGB driver - Phase 6 parallel 4-lane link"),
 ];
 
 const XTAL_FREQ_HZ: u32 = 12_000_000;
@@ -98,42 +92,37 @@ const PANELS_IN_CHAIN: usize = 4;
 const W: usize = 64 * PANELS_IN_CHAIN;
 const H: usize = 32;
 const B: usize = 8;
-// HUB75 pixel clock = sys_clk / (2*div), sys_clk = 150 MHz. 8 panels in series is
-// 2× the depth phase3-row verified clean at (2,0)=37.5 MHz, AND the Adafruit HAT
-// adds an RC on CLK — so start SLOW and ramp only after the wall behaves; (6,0) is
-// the 12.5 MHz floor if you need it.
+// HUB75 pixel clock = sys_clk / (2*div), sys_clk = 150 MHz. Unchanged from the
+// single-chain bring-up; tune independently of the (faster) ingest clock.
 const DATA_CLK_DIV: (u16, u8) = (3, 0); // ~25 MHz pixel clock (150/(2*3))
-// Brightness gain (Phase 4 §set_oe_gain). 512-wide doubles the per-plane shift
-// window vs 256, so there is MORE dead time to fill — the gain ceiling roughly
-// doubles too (~16 before trading refresh). Start near the Phase-5 value, tune.
+// Brightness gain (Phase 4 §set_oe_gain) — carried from phase_experimental.
 const OE_GAIN: u32 = 64;
 
-// Framebuffer size in BYTES = one SPI frame. The single-chain engine uses u8
-// cells (1 byte each — no idle chain-B half), so there is NO ×2: fb_cells(512,
-// 32,8) = 65536 = 64 KB for 8 panels; fb_cells(256,32,8) = 32768 = 32 KB for 4.
-// Must match the host packer rayglow/render/hub75.py::pack_single.
+// Framebuffer size in BYTES = one parallel frame. SINGLE-CHAIN u8 cells (no idle
+// chain-B half), so NO ×2: fb_cells(256,32,8) = 32768 = 32 KB at 4 panels,
+// fb_cells(512,32,8) = 65536 = 64 KB at 8. Must match rayglow/render/hub75.py::
+// pack_single. (Two-chain swap: ×2, and use pack().)
 const FRAME_BYTES: u32 = hub75::fb_cells(W, H, B) as u32;
 
-// Frame-RX stall timeout. If the RX DMA's byte count STARTS advancing then stops
-// for this long, the frame is corrupt (SI bit-loss at too-high a clock, or a short
-// send) — drop it and re-arm instead of wedging forever (which previously needed a
-// reflash to clear). A not-yet-started transfer (the Pi still rendering a heavy
-// shader, READY already high) never trips it, and it only runs during the
-// otherwise-idle ingest wait, so it costs no steady-state throughput.
+// Frame-RX stall timeout (see phase_experimental). A started-then-stalled transfer
+// is corrupt — abort + drop instead of wedging; a not-yet-started transfer never
+// trips it. Runs only during the idle ingest wait → no steady-state cost.
 const RX_STALL_US: u32 = 50_000; // 50 ms with zero byte progress = dead transfer
 
-// SPI-link GPIO. Unchanged from Phase 5. MOSI is the PIO IN base; SCLK and CS are
-// sampled with `wait gpio` (absolute), so they are hardcoded in the PIO program
-// below — keep these consts in sync with the literals there.
-const MOSI_PIN: u8 = 20;
-const SCLK_PIN: u8 = 21;
-const CS_PIN: u8 = 22; // chip-select (CE0), active low — frame boundary
-const READY_PIN: u8 = 12;
-const _: () = assert!(SCLK_PIN == 21, "PIO `wait gpio 21` must match SCLK_PIN");
-const _: () = assert!(CS_PIN == 22, "PIO `wait gpio 22` must match CS_PIN");
+// Parallel-link GPIO. DATA0 is the PIO IN base; the 4 lanes DATA0..3 must be
+// CONTIGUOUS (GP20..GP23). DCLK and CS are sampled with absolute `wait gpio`, so
+// they are hardcoded in the PIO program below — keep these consts in sync.
+const DATA0_PIN: u8 = 20; // 4 lanes: GP20..GP23
+const NUM_LANES: u8 = 4;
+const DCLK_PIN: u8 = 24; // Pi-driven data clock
+const CS_PIN: u8 = 25; // chip-select, active low — frame boundary
+const READY_PIN: u8 = 26; // RP2350 -> Pi, armed-and-waiting (same pin as SPI READY)
+const _: () = assert!(DATA0_PIN == 20, "PIO `in pins, 4` base must match DATA0_PIN");
+const _: () = assert!(DCLK_PIN == 24, "PIO `wait gpio 24` must match DCLK_PIN");
+const _: () = assert!(CS_PIN == 25, "PIO `wait gpio 25` must match CS_PIN");
 
 static mut DISPLAY_BUFFER: hub75::single::DisplayMemory1<W, H, B> =
-    hub75::single::DisplayMemory1::new();
+    hub75::single::DisplayMemory1::new(); // SINGLE-CHAIN (two-chain: DisplayMemory)
 
 #[hal::entry]
 fn main() -> ! {
@@ -164,10 +153,10 @@ fn main() -> ! {
 
     // PIO0 → HUB75 scan-out engine (unchanged from earlier phases).
     let (mut pio0, sm0, sm1, sm2, _) = pac.PIO0.split(&mut pac.RESETS);
-    // PIO1 → SPI receiver.
+    // PIO1 → parallel receiver.
     let (mut pio1, rx_sm, _, _, _) = pac.PIO1.split(&mut pac.RESETS);
 
-    // DMA: ch0–3 for the engine, ch4 for SPI-RX → framebuffer.
+    // DMA: ch0–3 for the engine, ch4 for parallel-RX → framebuffer.
     pac.RESETS.reset().modify(|_, w| w.dma().set_bit());
     pac.RESETS.reset().modify(|_, w| w.dma().clear_bit());
     while pac.RESETS.reset_done().read().dma().bit_is_clear() {}
@@ -179,7 +168,7 @@ fn main() -> ! {
     };
 
     let mut display = unsafe {
-        hub75::single::Display1::new(
+        hub75::single::Display1::new( // SINGLE-CHAIN (two-chain: hub75::Display)
             &mut DISPLAY_BUFFER,
             hub75::DisplayPins {
                 // Chain A (GP0–5) → the single physical chain via the Adafruit HAT.
@@ -218,49 +207,65 @@ fn main() -> ! {
     };
     display.set_oe_gain(OE_GAIN);
 
-    // --- SPI-RX pin setup (unchanged from Phase 5) ------------------------
-    // MOSI + SCLK into PIO1 with pull-down (E9 backstop). CS is active-low, so it
-    // gets a pull-UP (idles high between frames).
-    let _mosi = pins
-        .gpio20
-        .into_function::<FunctionPio1>()
-        .into_pull_type::<PullDown>();
-    let _sclk = pins
-        .gpio21
+    // --- Parallel-RX pin setup --------------------------------------------
+    // 4 data lanes (GP20..23) + DCLK into PIO1 with pull-down (E9 backstop, idle
+    // low). CS is active-low, so it gets a pull-UP (idles high between frames).
+    // Bind them so the pads stay routed to PIO1 for the program's lifetime.
+    let _data: [_; 4] = [
+        pins.gpio20.into_function::<FunctionPio1>().into_pull_type::<PullDown>().into_dyn_pin(),
+        pins.gpio21.into_function::<FunctionPio1>().into_pull_type::<PullDown>().into_dyn_pin(),
+        pins.gpio22.into_function::<FunctionPio1>().into_pull_type::<PullDown>().into_dyn_pin(),
+        pins.gpio23.into_function::<FunctionPio1>().into_pull_type::<PullDown>().into_dyn_pin(),
+    ];
+    let _dclk = pins
+        .gpio24
         .into_function::<FunctionPio1>()
         .into_pull_type::<PullDown>();
     let _cs = pins
-        .gpio22
+        .gpio25
         .into_function::<FunctionPio1>()
         .into_pull_type::<PullUp>();
     // READY is a plain push-pull output (SIO), idle low until a frame is armed.
     let mut ready = pins.gpio26.into_push_pull_output();
     let _ = ready.set_low();
 
-    // --- SPI-RX PIO program (mode 0, CS-framed) — unchanged from Phase 5 ----
+    // --- Parallel-RX PIO program (CS-framed, 4 lanes/clock) ----------------
+    // Frame boundary = the CS edge, NOT a byte count (immune to idle-line noise +
+    // handshake jitter). Per frame: wait CS high (idle) then CS low (fresh start),
+    // then on each DCLK rising edge sample all 4 lanes (a nibble) → autopush at
+    // 8 bits = one byte per TWO clocks → byte-size DMA → in-order framebuffer
+    // bytes. `restart()` (each frame, CPU) re-parks at the CS preamble with shift
+    // counter 0, so a dropped frame can't desync nibble/byte alignment.
     let program = pio::pio_asm!(
         ".wrap_target",
-        "wait 1 gpio 22", // CS high  — idle / previous frame ended
-        "wait 0 gpio 22", // CS low   — fresh frame start, shift counter = 0
-        "bitloop:",
-        "wait 1 gpio 21", // SCLK rising = sample point
-        "in pins, 1",     // sample MOSI (IN base = GP20)
-        "wait 0 gpio 21", // SCLK falling
-        "jmp bitloop",    // next bit (restart() re-parks at the CS preamble)
+        "wait 1 gpio 25", // CS high  — idle / previous frame ended
+        "wait 0 gpio 25", // CS low   — fresh frame start, shift counter = 0
+        "nibloop:",
+        "wait 1 gpio 24", // DCLK rising = sample point
+        "in pins, 4",     // sample DATA0..3 (IN base = GP20) = one nibble
+        "wait 0 gpio 24", // DCLK falling
+        "jmp nibloop",    // next nibble (restart() re-parks at the CS preamble)
         ".wrap",
     );
     let installed = pio1.install(&program.program).unwrap();
     let (mut rx_sm, rx_fifo, _tx) = PIOBuilder::from_installed_program(installed)
-        .in_pin_base(MOSI_PIN)
-        .in_shift_direction(ShiftDirection::Left) // MSB first
+        .in_pin_base(DATA0_PIN)
+        // ShiftLeft so the assembled byte lands in ISR[7:0] for the byte DMA (the
+        // proven single-lane placement); first nibble sampled becomes the HIGH
+        // nibble, so the Pi sends high-nibble-first (PioOut nibble_swap).
+        .in_shift_direction(ShiftDirection::Left)
         .autopush(true)
-        .push_threshold(8) // one byte per push
+        .push_threshold(8) // one byte per TWO nibble samples
         .buffers(Buffers::OnlyRx)
         .clock_divisor_fixed_point(1, 0) // full system clock
         .build(rx_sm);
+    // All sampled pins are inputs: the 4 data lanes + DCLK + CS.
     rx_sm.set_pindirs([
-        (MOSI_PIN, PinDir::Input),
-        (SCLK_PIN, PinDir::Input),
+        (DATA0_PIN, PinDir::Input),
+        (DATA0_PIN + 1, PinDir::Input),
+        (DATA0_PIN + 2, PinDir::Input),
+        (DATA0_PIN + 3, PinDir::Input),
+        (DCLK_PIN, PinDir::Input),
         (CS_PIN, PinDir::Input),
     ]);
 
@@ -269,11 +274,12 @@ fn main() -> ! {
     let rx_dreq = rx_fifo.dreq_value();
 
     info!(
-        "phase-experimental: {}x{} SINGLE-CHAIN wall (u8 cells, chain A). CS-framed SPI-RX on PIO1 (MOSI GP{}, SCLK GP{}, CS GP{}), READY GP{}. frame = {} bytes.",
+        "phase6-parallel: {}x{} SINGLE-CHAIN wall (u8 cells, chain A). 4-lane CS-framed RX on PIO1 (DATA0 GP{}..GP{}, DCLK GP{}, CS GP{}), READY GP{}. frame = {} bytes.",
         W,
         H,
-        MOSI_PIN,
-        SCLK_PIN,
+        DATA0_PIN,
+        DATA0_PIN + NUM_LANES - 1,
+        DCLK_PIN,
         CS_PIN,
         READY_PIN,
         FRAME_BYTES
@@ -282,6 +288,12 @@ fn main() -> ! {
     let mut frames: u32 = 0;
     let mut drops: u32 = 0;
     let mut last_us: u32 = timer.get_counter_low();
+    // Bring-up aid: address of the most recently received frame, so the per-second
+    // telemetry can dump its first bytes for the nibble/lane-order check against a
+    // known ramp from `tools/pio_ramp.py`. Validated 2026-06 (nibble_swap=True,
+    // lanes correct, clean ≤ clkdiv 3); flip true to re-check after a rewire.
+    const RX_DEBUG_BYTES: bool = false;
+    let mut last_good: u32 = 0;
     let mut sm = rx_sm.start();
 
     // Stolen handle to the DMA block's global CHAN_ABORT register, used only to
@@ -295,8 +307,8 @@ fn main() -> ! {
         let dst = display.inactive_fb_ptr() as u32;
 
         // Fresh alignment: drain any stale RX byte and restart the SM so its
-        // shift counter is 0 → the next SCLK edge is bit 0 of this frame. Then
-        // arm the DMA to drain the FIFO into `dst`.
+        // shift counter is 0 → the next DCLK edge is the first nibble of this
+        // frame. Then arm the DMA to drain the FIFO into `dst`.
         sm.clear_fifos();
         sm.restart();
         arm_rx_dma(&rx_ch, fifo_addr, dst, FRAME_BYTES, rx_dreq);
@@ -305,10 +317,9 @@ fn main() -> ! {
         let _ = ready.set_high();
 
         // Zero-CPU ingest: spin until the DMA has placed all FRAME_BYTES, with a
-        // stall watchdog (see RX_STALL_US). We watch the remaining byte count: any
-        // progress resets the timer; a transfer that has STARTED (count < total)
-        // but then sits unchanged past the timeout is a corrupt/short frame, so we
-        // abort the channel and drop the frame rather than spin forever.
+        // stall watchdog (see RX_STALL_US). Any byte-count progress resets the
+        // timer; a transfer that STARTED then sat unchanged past the timeout is a
+        // corrupt/short frame, so we abort the channel and drop it.
         let mut last_remaining = FRAME_BYTES;
         let mut progress_us = timer.get_counter_low();
         let mut dropped = false;
@@ -338,12 +349,34 @@ fn main() -> ! {
             // flip avoids commit()'s racy `fb_loop_busy` wait that deadlocks under
             // this tight streaming cadence (see Display::flip).
             display.flip();
+            last_good = dst; // buffer just filled (now on screen) — safe to read
         }
 
         frames += 1;
         let now = timer.get_counter_low();
         if now.wrapping_sub(last_us) >= 1_000_000 {
             info!("rx fps {} (drops {})", frames, drops);
+            if RX_DEBUG_BYTES && last_good != 0 {
+                // First 8 received bytes. Against a 0,1,2,3,… ramp: correct =
+                // 00 01 02 03 04 05 06 07; nibble-swapped = 00 10 20 30 40 50 60 70.
+                let p = last_good as *const u8;
+                let b = unsafe {
+                    [
+                        p.read_volatile(),
+                        p.add(1).read_volatile(),
+                        p.add(2).read_volatile(),
+                        p.add(3).read_volatile(),
+                        p.add(4).read_volatile(),
+                        p.add(5).read_volatile(),
+                        p.add(6).read_volatile(),
+                        p.add(7).read_volatile(),
+                    ]
+                };
+                info!(
+                    "  rx[0..8] = {:#04x} {:#04x} {:#04x} {:#04x} {:#04x} {:#04x} {:#04x} {:#04x}",
+                    b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]
+                );
+            }
             frames = 0;
             drops = 0;
             last_us = now;
@@ -351,7 +384,7 @@ fn main() -> ! {
     }
 }
 
-/// Aborts the SPI-RX DMA channel (CH4) via the DMA block's global CHAN_ABORT
+/// Aborts the parallel-RX DMA channel (CH4) via the DMA block's global CHAN_ABORT
 /// register and waits for the abort to complete, leaving the channel idle and
 /// safe to re-arm. Used by the frame-RX stall watchdog to recover from a corrupt
 /// or short frame without a reflash.
@@ -360,9 +393,9 @@ fn abort_rx_dma(dma: &hal::pac::DMA) {
     while dma.chan_abort().read().bits() != 0 {}
 }
 
-/// (Re)arms the SPI-RX DMA channel for one frame: FIFO → framebuffer, byte-size,
-/// write-incrementing, paced by the PIO RX DREQ. Writing the trigger alias for
-/// the write address starts the channel.
+/// (Re)arms the parallel-RX DMA channel for one frame: FIFO → framebuffer,
+/// byte-size, write-incrementing, paced by the PIO RX DREQ. Writing the trigger
+/// alias for the write address starts the channel.
 fn arm_rx_dma(ch: &Channel<CH4>, fifo: u32, dst: u32, count: u32, dreq: u8) {
     ch.regs().ch_al1_ctrl().write(|w| unsafe {
         w.incr_read()

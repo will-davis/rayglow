@@ -34,7 +34,7 @@ class ShaderToy:
     """
 
     def __init__(self, width, height, scale=4, gamma=1.2, base_dir=None,
-                 use_pbo=True):
+                 use_pbo=False):
         self.width, self.height, self.scale = width, height, scale
         self.base_dir = base_dir          # directive image paths resolve here
         # Unused samplers bind to this 1x1 black texture so they're valid.
