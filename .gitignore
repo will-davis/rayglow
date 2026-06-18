@@ -1,7 +1,7 @@
 # Reference material
 .reference/
 *.pdf
-will-notes.md
+.will-notes.md
 
 # Python
 __pycache__/
