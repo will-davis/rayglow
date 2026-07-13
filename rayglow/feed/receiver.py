@@ -42,11 +42,36 @@ a v1 extension:
     4236    total (v2)
 
 The `flags` u16 carries source_domain (bits 0-3) + BEAT (bit 4) + DOWNBEAT
-(bit 5) in v2; it is always 0 for v0/v1.
+(bit 5) in v2+; it is always 0 for v0/v1.
+
+v3 (2996 bytes) keeps the v2 header/legacy prefix byte-for-byte (the legacy
+bands are still computed by the sender's unchanged MilkDrop path) and rebuilds
+the rest around 8 log-spaced bands with flywheel envelopes and theta phase
+accumulators (all derived on the sender's steady clock now — the Pi no longer
+integrates), a predictive beat tracker, a 128-bin spectrum, and key detection:
+
+    16      float32[7]   bass..vol    (legacy, as v0/v1/v2)
+    44      float32[2]   sub, sub_att (legacy)
+    52      float32[8]   band_imm     (8 log bands 20Hz..16kHz, AGC'd)
+    84      float32[24]  band_env     ([band][tier], band-major; 3 flywheel
+                                       tiers: ~125ms sym, punchy, heavy)
+    180     float32[24]  band_theta   ([band][tier], mod 200*pi; integrates
+                                       imm / env1 / env2)
+    276     float32[8]   band_onset   (per-band rectified flux, AGC'd)
+    308     float32[7]   vol_imm, vol_env[3], vol_theta[3]
+    336     float32[512] wave         (as v2)
+    2384    float32[128] spec         (hybrid lin/log axis, recomputed for 128)
+    2896    float32[12]  chroma       (as v2)
+    2944    float32[5]   centroid, flux, flatness, rolloff, crest
+    2964    float32[4]   bpm, beat_phase (predictive 0->1 ramp), bar_phase,
+                         beat_conf
+    2980    float32[2]   width, pan
+    2988    float32[2]   key_idx (0-11 C..B major, 12-23 minor), key_conf
+    2996    total (v3)
 
 All versions are accepted (the receiver dispatches on version + exact byte
-length).  Older senders report sub = bass and zeros/defaults for the v2-only
-fields.
+length).  Older senders report sub = bass and zeros/defaults for fields their
+version doesn't carry.
 """
 import socket
 import struct
@@ -58,17 +83,21 @@ from . import config
 PACKET_FMT = "<IHHIf7f128f"
 PACKET_FMT_V1 = "<IHHIf7f128f2f"
 PACKET_FMT_V2 = "<IHHIf7f2f512f512f12f5f3f2f"
+PACKET_FMT_V3 = "<IHHIf7f2f8f24f24f8f7f512f128f12f5f4f2f2f"
 PACKET_SIZE = struct.calcsize(PACKET_FMT)
 PACKET_SIZE_V1 = struct.calcsize(PACKET_FMT_V1)
 PACKET_SIZE_V2 = struct.calcsize(PACKET_FMT_V2)
+PACKET_SIZE_V3 = struct.calcsize(PACKET_FMT_V3)
 assert PACKET_SIZE == 556, f"packet struct is {PACKET_SIZE} bytes, spec says 556"
 assert PACKET_SIZE_V1 == 564
 assert PACKET_SIZE_V2 == 4236
+assert PACKET_SIZE_V3 == 2996
 
 MAGIC = 0x4D494C4B
 VERSIONS = {0: (PACKET_SIZE, PACKET_FMT),
             1: (PACKET_SIZE_V1, PACKET_FMT_V1),
-            2: (PACKET_SIZE_V2, PACKET_FMT_V2)}
+            2: (PACKET_SIZE_V2, PACKET_FMT_V2),
+            3: (PACKET_SIZE_V3, PACKET_FMT_V3)}
 
 # v2 tuple field offsets (header is 5 values: magic, ver, flags, seq, t).
 _V2_WAVE = slice(14, 14 + 512)
@@ -77,6 +106,20 @@ _V2_CHROMA = slice(_V2_SPEC.stop, _V2_SPEC.stop + 12)
 _V2_DESC = _V2_CHROMA.stop                       # centroid..crest (5)
 _V2_BEAT = _V2_DESC + 5                           # bpm, beat_phase, beat_conf
 _V2_STEREO = _V2_BEAT + 3                         # width, pan
+
+# v3 tuple field offsets (same 5-value header; f[5..13] = legacy bands + sub).
+_V3_BANDS = slice(14, 14 + 8)                     # band_imm[8]
+_V3_BENV = slice(_V3_BANDS.stop, _V3_BANDS.stop + 24)     # [band][tier]
+_V3_BTHETA = slice(_V3_BENV.stop, _V3_BENV.stop + 24)     # [band][tier]
+_V3_BONSET = slice(_V3_BTHETA.stop, _V3_BTHETA.stop + 8)  # band_onset[8]
+_V3_VOL = _V3_BONSET.stop                         # vol_imm + env[3] + theta[3]
+_V3_WAVE = slice(_V3_VOL + 7, _V3_VOL + 7 + 512)
+_V3_SPEC = slice(_V3_WAVE.stop, _V3_WAVE.stop + 128)
+_V3_CHROMA = slice(_V3_SPEC.stop, _V3_SPEC.stop + 12)
+_V3_DESC = _V3_CHROMA.stop                        # centroid..crest (5)
+_V3_BEAT = _V3_DESC + 5                           # bpm, beat_phase, bar, conf
+_V3_STEREO = _V3_BEAT + 4                         # width, pan
+_V3_KEY = _V3_STEREO + 2                          # key_idx, key_conf
 
 
 def _seq_newer(a, b):
@@ -87,10 +130,12 @@ def _seq_newer(a, b):
 def _to_dict(f, seq):
     """Unpacked packet tuple -> feature dict, version-aware.
 
-    Common fields (header, bands, the flags bits) are shared; wave/sub move
-    and the v2-only groups appear only for version >= 2.  Older senders get
-    sub = bass and None for the v2 arrays (FeatureState keeps its defaults),
-    so a v1 sender drives a v2 receiver with the spectrum channels idle.
+    Common fields (header, legacy bands, the flags bits) are shared; each
+    version's extra groups appear only when that version carries them.
+    Older senders get sub = bass, None for arrays they don't send
+    (FeatureState keeps its defaults) and simply omit newer scalars
+    (FeatureState holds its last value) — so a v1/v2 sender drives a v3
+    receiver with the newer channels idle, never garbage.
     """
     flags = f[2]
     out = {
@@ -102,7 +147,28 @@ def _to_dict(f, seq):
         "beat": bool(flags & 0x10),
         "downbeat": bool(flags & 0x20),
     }
-    if f[1] >= 2:
+    if f[1] >= 3:
+        out["sub"] = f[12]
+        out["sub_att"] = f[13]
+        out["bands"] = np.asarray(f[_V3_BANDS], dtype=np.float32)
+        out["band_env"] = np.asarray(f[_V3_BENV], dtype=np.float32).reshape(8, 3)
+        out["band_theta"] = np.asarray(f[_V3_BTHETA],
+                                       dtype=np.float32).reshape(8, 3)
+        out["band_onset"] = np.asarray(f[_V3_BONSET], dtype=np.float32)
+        out["vol_imm"] = f[_V3_VOL]
+        out["vol_env"] = np.asarray(f[_V3_VOL + 1:_V3_VOL + 4], dtype=np.float32)
+        out["vol_theta"] = np.asarray(f[_V3_VOL + 4:_V3_VOL + 7],
+                                      dtype=np.float32)
+        out["wave"] = np.asarray(f[_V3_WAVE], dtype=np.float32)
+        out["spec"] = np.asarray(f[_V3_SPEC], dtype=np.float32)
+        out["chroma"] = np.asarray(f[_V3_CHROMA], dtype=np.float32)
+        out["centroid"], out["flux"], out["flatness"], out["rolloff"], \
+            out["crest"] = f[_V3_DESC:_V3_DESC + 5]
+        out["bpm"], out["beat_phase"], out["bar_phase"], out["beat_conf"] = \
+            f[_V3_BEAT:_V3_BEAT + 4]
+        out["width"], out["pan"] = f[_V3_STEREO:_V3_STEREO + 2]
+        out["key_idx"], out["key_conf"] = f[_V3_KEY:_V3_KEY + 2]
+    elif f[1] == 2:
         out["sub"] = f[12]
         out["sub_att"] = f[13]
         out["wave"] = np.asarray(f[_V2_WAVE], dtype=np.float32)
