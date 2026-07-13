@@ -1,11 +1,16 @@
-"""FeatureState: the audio->visual interface (band scalars + waveform + v2 feed).
+"""FeatureState: the audio->visual interface (band scalars + waveform + v3 feed).
 
 Holds the latest packet values; when no packets arrive for a while, synthesizes
 a gentle fallback (band values breathing around 1.0, sine waveform, a moving
 spectrum) so the display never freezes or goes dark.
 
-v2 adds richer fields (spectrum, chroma, spectral descriptors, beat/tempo,
-stereo, source_domain); a v0/v1 sender leaves them at their neutral defaults.
+v3 is the primary feed: 8 log-spaced bands with 3 flywheel envelope tiers and
+3 theta phase accumulators each (all derived on the SENDER's steady clock —
+nothing is integrated here anymore), per-band onsets, a vol block with the
+same treatment, a predictive beat block (+bar_phase), and key detection.
+The v2-era fields (spectrum, chroma, descriptors, stereo) carry over; the
+legacy bass/mid/treb/vol/sub scalars are still shipped by every sender.
+Older senders leave the fields they don't carry at these neutral defaults.
 """
 import math
 
@@ -14,8 +19,11 @@ import numpy as np
 from . import config
 
 WAVE_SAMPLES = 512
-SPEC_BINS = 512
+SPEC_BINS = 128         # v3 wire size; self.spec holds whatever length arrived
 CHROMA_N = 12
+N_BANDS = 8
+N_TIERS = 3
+_THETA_WRAP = 628.3185307179586    # 200*pi, mirrors the sender's THETA_WRAP
 
 
 class FeatureState:
@@ -26,7 +34,19 @@ class FeatureState:
         self.vol = 1.0
         self.sub = self.sub_att = 1.0   # v1: true 23-117Hz band (v0: = bass)
         self.wave = np.zeros(WAVE_SAMPLES, dtype=np.float32)
-        # v2 feed (neutral defaults; older senders never set these)
+        # v3 feed: bands/envelopes/thetas at "typical"/rest, so an old sender
+        # renders a calm flat state rather than black
+        self.bands = np.ones(N_BANDS, dtype=np.float32)
+        self.band_env = np.ones((N_BANDS, N_TIERS), dtype=np.float32)
+        self.band_theta = np.zeros((N_BANDS, N_TIERS), dtype=np.float32)
+        self.band_onset = np.zeros(N_BANDS, dtype=np.float32)
+        self.vol_imm = 1.0
+        self.vol_env = np.ones(N_TIERS, dtype=np.float32)
+        self.vol_theta = np.zeros(N_TIERS, dtype=np.float32)
+        self.bar_phase = 0.0
+        self.key_idx = 0.0      # 0-11 C..B major, 12-23 minor
+        self.key_conf = 0.0
+        # v2-era feed (neutral defaults; older senders never set these)
         self.spec = np.zeros(SPEC_BINS, dtype=np.float32)
         self.chroma = np.zeros(CHROMA_N, dtype=np.float32)
         self.centroid = self.flux = self.flatness = 0.0
@@ -72,7 +92,19 @@ class FeatureState:
             self.source_domain = pkt.get("source_domain", 0)
             self.beat = pkt.get("beat", False)
             self.downbeat = pkt.get("downbeat", False)
-            # v2-only arrays/scalars: keep last value when a v0/v1 packet omits them
+            # newer-version arrays/scalars: keep last value (or the neutral
+            # defaults) when an older packet omits them
+            if pkt.get("bands") is not None:     # v3 band arrays travel together
+                self.bands = pkt["bands"]
+                self.band_env = pkt["band_env"]
+                self.band_theta = pkt["band_theta"]
+                self.band_onset = pkt["band_onset"]
+                self.vol_env = pkt["vol_env"]
+                self.vol_theta = pkt["vol_theta"]
+            self.vol_imm = pkt.get("vol_imm", self.vol_imm)
+            self.bar_phase = pkt.get("bar_phase", self.bar_phase)
+            self.key_idx = pkt.get("key_idx", self.key_idx)
+            self.key_conf = pkt.get("key_conf", self.key_conf)
             if pkt.get("spec") is not None:
                 self.spec = pkt["spec"]
             if pkt.get("chroma") is not None:
@@ -139,3 +171,42 @@ class FeatureState:
         self.width = 0.6 + 0.3 * math.sin(t * 0.13)
         self.pan = 0.4 * math.sin(t * 0.19)
         self.source_domain = 0
+
+        # v3 fallback: the low bands pump on the same 120-BPM clock with
+        # punch fading out by b4, mids wander, tiers smear the pulse with
+        # progressively more "momentum".  Thetas are CLOSED-FORM integrals
+        # of those rates (no dt bookkeeping — _synthesize must stay
+        # stateless): a linear term plus a per-beat surge for the punchy
+        # bands, so low-band rotation visibly kicks with the fake beat.
+        i = np.arange(N_BANDS, dtype=np.float32)
+        phase = np.float32(self.beat_phase)
+        beats_done = np.float32(math.floor(t * 2.0))
+        punch = np.maximum(0.0, 1.0 - i / 4.0)      # b0 hits hard, gone by b4
+        wander = 1.0 + 0.25 * np.sin(t * (0.3 + 0.17 * i) + 1.7 * i)
+        self.bands = (wander + 2.2 * punch
+                      * np.exp(-6.0 * phase)).astype(np.float32)
+        self.band_env = np.stack([
+            wander + 1.8 * punch * np.exp(-4.0 * phase),      # ~125ms feel
+            0.9 * wander + 1.2 * punch * np.exp(-1.5 * phase),  # punchy tier
+            1.0 + 0.3 * np.sin(t * 0.23 + 0.8 * i),           # heavy tier
+        ], axis=1).astype(np.float32)
+        # integral of the beat pulse: one fixed surge per beat + the ramp
+        # through the current one (integral of exp(-6*phase) over a beat)
+        surge = (beats_done + (1.0 - np.exp(-6.0 * phase))) / 12.0
+        self.band_theta = (np.stack([
+            t * 1.0 + 2.2 * punch * surge,
+            t * 0.9 + 1.2 * punch * surge,
+            t * (0.7 + 0.05 * i),
+        ], axis=1) % _THETA_WRAP).astype(np.float32)
+        sparkle = 2.0 if (t * 7.3) % 1.0 < 0.06 else 0.0
+        self.band_onset = (3.0 * punch * np.exp(-20.0 * phase)).astype(np.float32)
+        self.band_onset[6:] += np.float32(sparkle)
+        self.vol_imm = 1.0 + 0.5 * beat
+        self.vol_env = np.array([1.0 + 0.4 * beat,
+                                 1.0 + 0.25 * math.exp(-1.5 * float(phase)),
+                                 1.0 + 0.1 * math.sin(t * 0.19)], np.float32)
+        self.vol_theta = np.array([t * 1.1, t * 0.95, t * 0.8],
+                                  np.float32) % np.float32(_THETA_WRAP)
+        self.bar_phase = ((int(t * 2.0) % 4) + self.beat_phase) / 4.0
+        self.key_idx = float(int(t / 8.0) % 24)     # stroll through the keys
+        self.key_conf = 0.7
