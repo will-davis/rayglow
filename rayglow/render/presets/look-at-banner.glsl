@@ -1,4 +1,4 @@
-// sdf-text-card.glsl — REFERENCE CARD: bitmap signed-distance-field text.
+// look-at-banner.glsl — "RAYGLOW" banner riff derived from sdf-text-card.glsl.
 //
 // PURPOSE
 //   A worked, self-contained example of rendering crisp text on the LED wall
@@ -112,14 +112,26 @@ float glyphDist(int i, vec2 tp) {
 vec3 BG_COL = vec3(0.0);
 
 void mainImage(out vec4 O, in vec2 I) {
-    // IMPORT AUDIO INFO
-    vec4 bass  = texelFetch(iChannel0, ivec2(0, 0), 0);
-    vec4 mid   = texelFetch(iChannel0, ivec2(1, 0), 0);
-    vec4 treb  = texelFetch(iChannel0, ivec2(2, 0), 0);
-    vec4 vol   = texelFetch(iChannel0, ivec2(3, 0), 0);
-    vec4 sub   = texelFetch(iChannel0, ivec2(4, 0), 0);
-    vec4 theta = texelFetch(iChannel0, ivec2(5, 0), 0);
-    vec4 meta  = texelFetch(iChannel0, ivec2(6, 0), 0);
+    // IMPORT AUDIO INFO — legacy scalars rebuilt on the v3 16x3 milk texture
+    // (see textures.py).  Old 13x1 texels 0-4 were (.x imm .y att .z ddt .w env):
+    // imm/att now live in the legacy block (9..11,2); env = env0 (row 0 .y) of
+    // the nearest v3 band; ddt is gone in v3 (row 1 .w onset is its + half) -> 0.
+    vec4 lvl   = texelFetch(iChannel0, ivec2(9, 2), 0);   // bass mid treb vol imm
+    vec4 attv  = texelFetch(iChannel0, ivec2(10, 2), 0);  // atts + sub imm
+    vec4 bass  = vec4(lvl.x, attv.x, 0.0, texelFetch(iChannel0, ivec2(2, 0), 0).y);
+    vec4 mid   = vec4(lvl.y, attv.y, 0.0, texelFetch(iChannel0, ivec2(5, 0), 0).y);
+    vec4 treb  = vec4(lvl.z, attv.z, 0.0, texelFetch(iChannel0, ivec2(7, 0), 0).y);
+    vec4 vol   = vec4(lvl.w, lvl.w,  0.0, texelFetch(iChannel0, ivec2(8, 0), 0).y);
+    vec4 sub   = vec4(attv.w, texelFetch(iChannel0, ivec2(11, 2), 0).x, 0.0,
+                      texelFetch(iChannel0, ivec2(0, 0), 0).y);
+    // old texel 5 (bass/mid/treb/vol theta) -> theta0 of the nearest v3 band
+    vec4 theta = vec4(texelFetch(iChannel0, ivec2(2, 1), 0).x,
+                      texelFetch(iChannel0, ivec2(5, 1), 0).x,
+                      texelFetch(iChannel0, ivec2(7, 1), 0).x,
+                      texelFetch(iChannel0, ivec2(8, 1), 0).x);
+    // old texel 6 (.x sub theta, .yzw pkt_age/live/source_domain)
+    vec4 meta  = vec4(texelFetch(iChannel0, ivec2(0, 1), 0).x,
+                      texelFetch(iChannel0, ivec2(7, 2), 0).xyz);
 
     // Quantize to the real panel grid so the dry-run GIF matches the wall.
     vec2 px = floor(I / iResolution.xy * PANEL);

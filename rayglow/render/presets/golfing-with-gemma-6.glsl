@@ -52,14 +52,18 @@ void mainImage( out vec4 fragColor, in vec2 fragCoord )
     vec2 uv = (fragCoord - 0.5 * iResolution.xy) / iResolution.y;
     
     // --- AUDIO INPUT SECTION ---
-    // Fetch the sub-frequency phase accumulation from iChannel0
-    vec4 meta = texelFetch(iChannel0, ivec2(6, 0), 0);
-    float phase = meta.x; 
-    
-    // Fetch raw frequency amplitudes from the iChannel0 texture (FFT data)
-    float low = texture(iChannel0, vec2(0.1, 0.0)).r;
-    float mid = texture(iChannel0, vec2(0.4, 0.0)).r;
-    float high = texture(iChannel0, vec2(0.8, 0.0)).r;
+    // Fetch the sub-frequency phase accumulation (v3 16x3 milk: b0 theta0 at
+    // (0,1); .yzw = pkt_age/live/source_domain from (7,2))
+    vec4 meta = vec4(texelFetch(iChannel0, ivec2(0, 1), 0).x,
+                     texelFetch(iChannel0, ivec2(7, 2), 0).xyz);
+    float phase = meta.x;
+
+    // "FFT" taps: on the old 13x1 texture these NEAREST texture() samples
+    // actually landed on texels 1/5/10 — legacy mid imm, bass theta and
+    // chroma C, not FFT bins.  Kept value-identical on the 16x3 layout:
+    float low  = texelFetch(iChannel0, ivec2(9, 2), 0).y;   // legacy mid imm
+    float mid  = texelFetch(iChannel0, ivec2(2, 1), 0).x;   // b2 theta0 (old bass theta)
+    float high = texelFetch(iChannel0, ivec2(4, 2), 0).x;   // chroma C
     // ---------------------------
 
     // Camera Setup

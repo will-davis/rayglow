@@ -30,10 +30,17 @@ void mainImage( out vec4 fragColor, in vec2 fragCoord ) {
     // We divide by iResolution.y to keep the scale consistent regardless of width
     vec2 uv = (fragCoord - 0.5 * iResolution.xy) / iResolution.y;
     
-    // Fetch the sub-frequency phase accumulation
-    vec4 meta = texelFetch(iChannel0, ivec2(6, 0), 0);
-    vec4 sub = texelFetch(iChannel0, ivec2(4, 0), 0);
-    vec4 vol   = texelFetch(iChannel0, ivec2(3, 0), 0);
+    // Fetch the sub-frequency phase accumulation (v3 16x3 milk layout):
+    // old texel 6 .x (sub theta) -> b0 theta0 at (0,1); .yzw meta -> (7,2).
+    // old texel 4 (sub) / texel 3 (vol): imm/att from the legacy block
+    // (9..11,2), env = env0 (row 0 .y) of b0 / vol; ddt gone in v3 -> 0.
+    vec4 meta = vec4(texelFetch(iChannel0, ivec2(0, 1), 0).x,
+                     texelFetch(iChannel0, ivec2(7, 2), 0).xyz);
+    vec4 sub  = vec4(texelFetch(iChannel0, ivec2(10, 2), 0).w,
+                     texelFetch(iChannel0, ivec2(11, 2), 0).x, 0.0,
+                     texelFetch(iChannel0, ivec2(0, 0), 0).y);
+    vec4 vol  = vec4(texelFetch(iChannel0, ivec2(9, 2), 0).ww, 0.0,
+                     texelFetch(iChannel0, ivec2(8, 0), 0).y);
     float phase = meta.x;
     
     // Create a slow time-based drift for variety

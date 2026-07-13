@@ -60,9 +60,11 @@ float RayMarch(vec3 ro, vec3 rd, float phase) {
 void mainImage( out vec4 fragColor, in vec2 fragCoord )
 {
     // 1. Initialize audio data
-    // meta.x = phase accumulation of sub frequency
-    vec4 meta = texelFetch(iChannel0, ivec2(6, 0), 0);
-    float phase = meta.x; 
+    // meta.x = phase accumulation of sub frequency (v3 16x3 milk: b0 theta0
+    // at (0,1); .yzw = pkt_age/live/source_domain from (7,2))
+    vec4 meta = vec4(texelFetch(iChannel0, ivec2(0, 1), 0).x,
+                     texelFetch(iChannel0, ivec2(7, 2), 0).xyz);
+    float phase = meta.x;
     
     // Normalize coordinates (-1 to 1)
     vec2 uv = (fragCoord - 0.5 * iResolution.xy) / iResolution.y;

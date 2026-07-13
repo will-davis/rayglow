@@ -326,7 +326,8 @@ void mainImage(out vec4 O, in vec2 I) {
     float outline = smoothstep(OUTLINE  - SOFT, OUTLINE  + SOFT, dist);
 
     // Bass pulse: shift the fill toward white on kicks (live audio only).
-    float bass = texelFetch(iChannel0, ivec2(0, 0), 0).w;   // .w = ~125ms envelope
+    // v3 16x3 milk: env0 (~125ms) of band b2, the old legacy-bass envelope.
+    float bass = texelFetch(iChannel0, ivec2(2, 0), 0).y;
     vec3 fillCol = mix(FILL_COL, vec3(1.0), clamp(bass - 0.6, 0.0, 0.6));
 
     // Composite: background → outline halo → glyph fill.

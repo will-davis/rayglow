@@ -34,9 +34,9 @@ void mainImage(out vec4 O, in vec2 I) {
     }
 
     // Live feed indicator dot (bottom-left).
-    // Red = synth fallback, Green = real UDP packets.
+    // Red = synth fallback, Green = real UDP packets (milk (7,2).y, v3 16x3).
     if (px.x < 2.0 && px.y > PANEL.y - 3.0) {
-        float live = texelFetch(iChannel0, ivec2(6, 0), 0).z;
+        float live = texelFetch(iChannel0, ivec2(7, 2), 0).y;
         O.rgb = mix(vec3(0.8, 0.1, 0.1), vec3(0.1, 0.9, 0.2), live);
     }
 }

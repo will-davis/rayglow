@@ -2,13 +2,16 @@
 //
 // Pairs with raytop_sender.py (run on the desktop, --host the Pi). That sender
 // self-labels as telemetry (source_domain=2) and packs scalars into the v2 milk
-// packet; this preset reads them back from the 'milk' texture. NO rayglow core
-// code changed — only this shader knows the telemetry convention:
-//   milk texel0 .x/.w = primary fraction 0..1 (GPU util / CPU util / net-down)
-//   milk texel1 .x/.w = secondary fraction   (VRAM / RAM / net-up)
-//   milk texel7  .x=clock MHz  .y=used GB  .z=total GB  .w=temp C   (raw floats)
-//   milk texel8  .x = metric mode id (0 gpu, 1 cpu, 2 net)
-//   milk texel6  .w = source_domain (2 = our telemetry; anything else => demo)
+// packet; this preset reads them back from the 'milk' texture (16x3, feed v3 —
+// the v2 scalars land in the legacy/globals row 2). NO rayglow core code
+// changed — only this shader knows the telemetry convention:
+//   legacy bass/mid ((9,2).x/.y, EMA at (10,2).x/.y) = primary / secondary
+//     fraction 0..1 (GPU util & VRAM / CPU util & RAM / net down & up) — read
+//     by the bufA history pass, not here
+//   milk (2,2)  .x=clock MHz  .y=used GB  .z=total GB  .w=temp C  (raw floats
+//     in the centroid/flux/flatness/rolloff descriptor slots)
+//   milk (3,2)  .x = metric mode id (0 gpu, 1 cpu, 2 net)  (the crest slot)
+//   milk (7,2)  .z = source_domain (2 = our telemetry; anything else => demo)
 //
 // Layout (left waterfall ~1/3, right block ~2/3, split at mid-height):
 //   +----//--+--------------+
@@ -375,10 +378,10 @@ vec3 memColor(float h) {
 void mainImage(out vec4 O, in vec2 I) {
     vec2 px = floor(I / iResolution.xy * PANEL);   // true panel pixel, 0..255 / 0..63
 
-    // --- Telemetry from the milk texture (raw floats) ---
-    float mode  = texelFetch(iChannel2, ivec2(8, 0), 0).x;   // crest slot
-    float sd    = texelFetch(iChannel2, ivec2(6, 0), 0).w;   // source_domain
-    vec4  desc  = texelFetch(iChannel2, ivec2(7, 0), 0);     // .x clk .y used .z total .w temp
+    // --- Telemetry from the milk texture (raw floats, v3 16x3 layout) ---
+    float mode  = texelFetch(iChannel2, ivec2(3, 2), 0).x;   // crest slot
+    float sd    = texelFetch(iChannel2, ivec2(7, 2), 0).z;   // source_domain
+    vec4  desc  = texelFetch(iChannel2, ivec2(2, 2), 0);     // .x clk .y used .z total .w temp
     float clk   = desc.x, used = desc.y, total = desc.z;
 
     bool demo = abs(sd - 2.0) > 0.5;     // not our telemetry (e.g. dry-run synth) -> demo values
