@@ -12,18 +12,24 @@ pipeline diagram and the repo map. The pieces:
 
 - **`sender/`** — the desktop daemon (`sender.py`): captures audio, sends feature
   packets. Standalone uv project (numpy + sounddevice). Has its own `README.md` +
-  `CLAUDE.md`; the MilkDrop-DSP-port invariants live there.
+  `CLAUDE.md`; the MilkDrop-DSP-port invariants live there. Sub-projects:
+  `esp32-mic/` (I2S-microphone sender firmware) + `espnow-dongle/` (ESP-NOW→UDP
+  bridge), each with its own README.
 - **`rayglow/`** — the Pi package, installed editable into a uv venv (`~/venv`):
   - `rayglow/feed/` — the audio-feature feed (packet `receiver`, `FeatureState`,
     rig `config`). Neutral, shared, dependency-free; the future yaml-config target.
   - `rayglow/render/` — **the live renderer**: headless EGL + GLES3 GPU rendering of
-    Shadertoy-dialect shaders, then `hub75.py` packs each frame and `spi_out.py` ships
+    Shadertoy-dialect shaders, then `hub75.py` packs each frame and `pio_out.py`
+    (default; `piobridge/` C shim over RP1 piolib) or `spi_out.py` (fallback) ships
     it to the RP2350. Entry: `python -m rayglow.render`.
   - `rayglow/fake_sender.py` — music-free test harness, same packet struct.
-  - `rayglow/spi_test.py` — static SPI test pattern (no GL) to isolate link/firmware.
+  - `rayglow/spi_test.py` — static test pattern over the SPI fallback (no GL) to
+    isolate link/firmware; `tools/pio_ramp.py` is the parallel-bus equivalent for
+    byte order.
 - **`firmware/`** — the **RP2350 Rust firmware** (`rp235x-hal`, no_std): a port of
   kjagiello's `hub75-pio-rs` widened to two parallel chains, brought up in verifiable
-  phases (`src/bin/phaseN_*.rs`; phase 5 = the production SPI link). Has its own README +
+  phases (`src/bin/phaseN_*.rs`; **phase 6 = the production 4-lane parallel link**,
+  built `--features two-chain`; phase 5 = the SPI fallback). Has its own README +
   `THIRD-PARTY.md`.
 - **`hardware/`** — the custom level-shifting HAT (KiCad project, Gerbers, net/pinout spec).
 - **`tools/`** — `verify.py`: proves `render/hub75.py` is byte-identical to the firmware.
@@ -51,13 +57,15 @@ them.
     default to zero for older senders). The full rules-that-look-wrong list (linear band
     thirds, equalize-on, the deliberately inconsistent `analyze_sub`, deferred
     `sounddevice` import) is in `sender/CLAUDE.md`.
-  - *The SPI frame* — `rayglow/render/hub75.py` packs a 64 KB bit-plane stream that the
-    firmware's `Display::render` (`firmware/src/lib.rs`) drops into its framebuffer with
-    zero touch-up. The packer and the firmware are a **1:1 port of each other**; change
-    one and you change both. `tools/verify.py` builds a Rust golden frame and asserts
-    they're byte-identical — run it after any layout/gamma change.
-- **The packer owns gamma; the render readback stays LINEAR.** `config.SPI_GAMMA` (2.1)
-  is applied by the firmware's CIE LUT downstream, so the renderer reads back at gamma
+  - *The link frame* — `rayglow/render/hub75.py` packs a 64 KB bit-plane stream that the
+    firmware's RX DMA drops into its framebuffer with zero touch-up (the same bytes over
+    the parallel bus or SPI; the layout is defined by `Display::render` in
+    `firmware/src/lib.rs`). The packer and the firmware are a **1:1 port of each other**;
+    change one and you change both. `tools/verify.py` builds a Rust golden frame and
+    asserts they're byte-identical — run it after any layout/gamma change.
+- **The packer owns gamma; the render readback stays LINEAR.** `config.PACK_GAMMA` (2.1)
+  is applied by the packer's CIE LUT (a bit-exact replica of firmware `lut.rs`; the
+  firmware itself never touches streamed frames), so the renderer reads back at gamma
   1.0. Correcting gamma on the Pi too would double-correct.
 - **Import direction:** `render` imports *up* into `feed`; keep `feed` dependency-free of
   the renderer (no GL/SPI imports at module load). SPI deps (`spidev`/`gpiozero`/`lgpio`)
@@ -71,13 +79,16 @@ them.
 ## Working across the machines
 
 There are three deploy targets: the **desktop** runs `sender/`; the **Pi** runs the
-`rayglow` package (deployed by `git pull` + editable install); the **RP2350** is flashed
-with the firmware (`cargo run` / `probe-rs`, see `firmware/README.md`). This repo (+ git
-history + `docs/design-history/`) is the durable shared memory across them — prefer
-writing knowledge into tracked files. The sshfs/NFS mount of the Pi (`~/pi-mount/`) is
-only a convenience for live-editing shaders. Machine-specific addresses/paths are
-generalized to placeholders in tracked files; real values live in the gitignored
-`LOCAL-SETUP.md` (template: `LOCAL-SETUP.example.md`).
+`rayglow` package (editable install); the **RP2350** is flashed with the firmware
+(`cargo run` / `probe-rs`, see `firmware/README.md`). The desktop clone is the single
+source of truth: **mutagen** continuously one-way-syncs it to the Pi's `~/rayglow`
+(a second mutagen session pushes the private, out-of-repo `~/Projects/rayglow-shaders`
+to the Pi's `~/presets`). Editing here IS deploying — there is no `git pull` or sshfs
+mount step anymore. This repo (+ git history + `docs/design-history/`) is the durable
+shared memory across the machines — prefer writing knowledge into tracked files.
+Machine-specific addresses/paths are generalized to placeholders in tracked files; real
+values (and the mutagen session details) live in the gitignored `LOCAL-SETUP.md`
+(template: `LOCAL-SETUP.example.md`).
 
 ## Verifying changes
 

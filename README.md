@@ -15,15 +15,17 @@ desktop (optional)                 Raspberry Pi 5                         RP2350
 │ music ▶ sink monitor   │  UDP    │ feed.receiver (latest-win) │  4-lane │ phase6: PIO+DMA RX    │
 │ sender.py: FFT ▶ bands │ ──────▶ │ render: GLSL ▶ pack        │   bus   │ zero-CPU scan-out     │
 │ + AutoGain + sub band  │  :5005  │ (hub75.pack, LINEAR RGB)   │ ──────▶ │ ▶ HUB75 ▶ 256×64 wall │
-│ ▶ 564-B v1 @ ~60 Hz    │ ~34KB/s │ headless EGL + GLES3       │  64 KB  │ (2 chains × 4 panels) │
+│ ▶ 4236-B v2 @ ~60 Hz   │ ~250KB/s│ headless EGL + GLES3       │  64 KB  │ (2 chains × 4 panels) │
 └────────────────────────┘         └────────────────────────────┘         └───────────────────────┘
         point $RAYGLOW_HOST ──────────────▶ your Pi
 ```
 
-The three stages live in **one repo**. The desktop and Pi halves are Python and stay in
-sync by **git** (not file-copy): the desktop runs `sender/`, the Pi runs the `rayglow`
-package (deployed by `git pull` + `pip install -e`). The RP2350b half is Rust firmware
-(`firmware/`) flashed onto the board, plus a custom level-shifting HAT (`hardware/`).
+The three stages live in **one repo**. The desktop and Pi halves are Python: the desktop
+runs `sender/`, the Pi runs the `rayglow` package installed editable (`pip install -e`)
+from a copy of this repo — get it there however you like (`git pull`, or a continuous
+file sync such as mutagen/sshfs for live shader editing). The RP2350b half is Rust
+firmware (`firmware/`) flashed onto the board, plus a custom level-shifting HAT
+(`hardware/`).
 First-time setup is in [Deploy](#deploy); full credits and licensing are in
 [ATTRIBUTION.md](ATTRIBUTION.md) (RayGLow is **MIT** — see [LICENSE](LICENSE)).
 
@@ -35,8 +37,8 @@ struct, so the Pi can drive the wall with no music source at all.
 Streaming PCM means reconstructing a continuous signal on the far end: ring buffers,
 clock-drift resampling, jitter buffers. Features are **stateless per frame** — a lost or
 late packet just means the Pi renders with the previous values, and at 60 Hz one held
-frame is invisible. The Pi does zero audio work, the wire carries ~34 KB/s, and UDP gets
-used the way UDP wants to be used.
+frame is invisible. The Pi does zero audio work, the wire carries ~0.25 MB/s, and UDP
+gets used the way UDP wants to be used.
 
 ## Why offload scan-out to the RP2350b
 
@@ -44,17 +46,18 @@ Bit-banging HUB75 from a Linux SoC fights the scheduler — it needs a dedicated
 and still jitters (the Pi 5's RP1 southbridge made it worse). The RP2350b runs the refresh
 loop entirely in **3 PIO state machines + 4 self-chaining DMA channels**, with the CPU
 never touching the pixel path. The Pi renders at whatever rate it likes and ships 64 KB
-frames over the link; the RP2350b holds a rock-steady, flicker-free refresh and applies
-the CIE gamma LUT downstream (so the Pi's render readback stays LINEAR).
+frames over the link — already gamma-corrected by the packer's CIE LUT (a bit-exact
+replica of the firmware's `lut.rs`, so the Pi's render readback stays LINEAR); the
+RP2350b holds a rock-steady, flicker-free refresh.
 
 ## Why a parallel bus, not SPI
 
 The link was originally 1-lane SPI, and SPI still works as the proven fallback
-(`--transport spi`). But a 32 KB frame takes ~6.6 ms at 40 MHz SPI — long enough to sit on
-the critical path. A **4-lane source-synchronous parallel bus**, clocked out by the Pi 5's
-RP1 PIO block, drops that to ~1.3 ms. Only the wire changes: the byte stream is identical
-to the SPI path (same `hub75.py` packer output, same CS-framing + READY handshake), so the
-firmware and packer don't change. (4 lanes, not 8: the RP2350b scan-out engine owns
+(`--transport spi`). But the 64 KB frame takes ~13 ms at 40 MHz SPI — long enough to sit
+on the critical path. A **4-lane source-synchronous parallel bus**, clocked out by the
+Pi 5's RP1 PIO block, drops that to ~2 ms (clkdiv 3; ~1.3 ms at clkdiv 2). Only the wire
+changes: the byte stream is identical to the SPI path (same `hub75.py` packer output,
+same READY handshake), so the firmware and packer don't change. (4 lanes, not 8: the RP2350b scan-out engine owns
 GP0–18, leaving GP19–27 for the link.) See
 [`rayglow/render/piobridge/README.md`](rayglow/render/piobridge/README.md).
 
@@ -113,8 +116,8 @@ git clone <your-fork-url> ~/rayglow
 cd ~/rayglow
 uv venv ~/venv
 uv pip install --python ~/venv/bin/python -e '.[pi]'   # core + Pi link deps
-# thereafter:
-cd ~/rayglow && git pull
+# thereafter: update the checkout (git pull, or let your file sync — e.g. a
+# mutagen session pushing from the dev machine — keep it current)
 ```
 
 `.[pi]` pulls the Pi-only deps (`spidev`, `gpiozero`, `lgpio`); EGL/GLES come from system
@@ -123,24 +126,26 @@ environment but respects the installed package; hardware mode keeps root for GPI
 re-read shader files on hot reload, so the clone must live somewhere root can read (e.g.
 under `~`).
 
-- **SPI link (default, `--transport spi`):** enable SPI and make sure
+- **Parallel link (default, `--transport pio`):** build `piobridge/libpioshim.so`
+  against the RP1 `piolib` first — see
+  [`rayglow/render/piobridge/README.md`](rayglow/render/piobridge/README.md).
+- **SPI fallback (`--transport spi`):** enable SPI and make sure
   `/sys/module/spidev/parameters/bufsiz >= 65536` so a 64 KB frame goes in one transfer.
-- **Parallel link (`--transport pio`):** build `piobridge/libpioshim.so` against the RP1
-  `piolib` first — see [`rayglow/render/piobridge/README.md`](rayglow/render/piobridge/README.md).
 
 Per-machine addresses/paths: see [`LOCAL-SETUP.example.md`](LOCAL-SETUP.example.md).
 
-**Firmware (RP2350b).** Flash the board once: `phase5-spi` for the SPI link or
-`phase6-parallel` for the 4-lane bus. Toolchain bootstrap and `cargo run`/`probe-rs`
-instructions are in [`firmware/README.md`](firmware/README.md).
+**Firmware (RP2350b).** Flash the board once: `phase6-parallel --features two-chain`
+for the 4-lane bus (production) or `phase5-spi` for the SPI fallback. Toolchain
+bootstrap and `cargo run`/`probe-rs` instructions are in
+[`firmware/README.md`](firmware/README.md).
 
 ## Status
 
 Working end-to-end: the desktop sender feeds the renderer, which packs frames the
 firmware accepts byte-for-byte (`tools/verify.py` is green). The renderer hot-reloads
-`.glsl` files live (edit, save, watch the panel recompile). The RP2350b firmware is
-hardware-verified through Phase 4 (full 256×64 animation); the Phase 5 SPI link is the
-proven transport, and the Phase 6 4-lane parallel bus is in bring-up against the Pi's
-`render/pio_out.py`. Next: a microphone input mode for the sender, and pulling config into
-a user-editable yaml so the project runs on someone else's wall/network by editing one
+`.glsl` files live (edit, save, watch the panel recompile). The Phase 6 4-lane parallel
+bus is the production transport (hardware-verified on the custom HAT, driving the full
+256×64 wall); the Phase 5 SPI link remains the proven fallback. A microphone input path
+exists (`sender/esp32-mic/` + `sender/espnow-dongle/`). Next: pulling config into a
+user-editable yaml so the project runs on someone else's wall/network by editing one
 file.

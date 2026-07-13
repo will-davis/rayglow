@@ -105,21 +105,24 @@ inputs tied to GND.
 - **Pi 5V (pins 2,4): NOT CONNECTED** — the HAT does not draw from or backfeed
   the dev board's 5 V. The '245 rail is the panel-supply 5 V via J5.
 
-## 6. SPI/sync breakout (J4, 1×8)
+## 6. Link breakout (J4, 1×8)
 
-| pin | net | intended Phase-5 use |
-|---|---|---|
-| 1 | GP19 | SPI (e.g. SCK via PIO) |
-| 2 | GP20 | SPI (MOSI ← Pi 5) |
-| 3 | GP21 | SPI (CS) |
-| 4 | GP22 | SPI (MISO / spare) |
-| 5 | GP26 | frame-commit sync (shared across boards) |
-| 6 | GP27 | spare |
-| 7 | 3V3 | logic reference |
-| 8 | GND | return |
+| pin | net | intended Phase-5 use (design intent) | as deployed (Phase-6 parallel link) |
+|---|---|---|---|
+| 1 | GP19 | SPI (e.g. SCK via PIO) | DATA0 ← Pi GPIO12 |
+| 2 | GP20 | SPI (MOSI ← Pi 5) | DATA1 ← Pi GPIO13 |
+| 3 | GP21 | SPI (CS) | DATA2 ← Pi GPIO14 |
+| 4 | GP22 | SPI (MISO / spare) | DATA3 ← Pi GPIO15 |
+| 5 | GP26 | frame-commit sync (shared across boards) | DCLK ← Pi GPIO20 |
+| 6 | GP27 | spare | READY → Pi GPIO25 |
+| 7 | 3V3 | logic reference | (unchanged) |
+| 8 | GND | return | (unchanged) |
 
-> Exact SPI/sync pin roles are finalized in Phase 5 (PIO-SPI on any of these);
-> the HAT just passes the spare GPIO + power through.
+> The nets are as fabbed; the roles column on the right is what actually runs on
+> them — the Phase-6 **4-lane parallel bus** (see
+> `../rayglow/render/piobridge/README.md` and `../firmware/src/bin/phase6_parallel.rs`).
+> CS (reserve) is GP25 via a jumper to the J1 header, not J4. The HAT just passes
+> the GPIO + power through, so no board change was needed.
 
 ## 7. Power & grounding (§9.3)
 

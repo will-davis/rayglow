@@ -48,19 +48,19 @@ about.
 
 ## Designing for *this* panel
 
-256×32 is an extreme letterbox. With the centered coords used throughout
+256×64 is a strong letterbox. With the centered coords used throughout
 (`p = (fragCoord - 0.5*iResolution.xy)/iResolution.y`), the visible world is
-about **8 units wide and 1 unit tall** (`p.x ∈ [-4,4]`, `p.y ∈ [-0.5,0.5]`).
+about **4 units wide and 1 unit tall** (`p.x ∈ [-2,2]`, `p.y ∈ [-0.5,0.5]`).
 Consequences worth internalizing:
 
-- **Big shapes, low spatial frequency.** Anything finer than a few of the 32
+- **Big shapes, low spatial frequency.** Anything finer than a few of the 64
   rows disappears. Contour/stripe frequencies that look great at 1080p alias to
   mush here — keep them low (see the `cos(d * 80.0)` note in file 03).
 - **Use the long axis.** Scrolling waves (02), tiled rows (04), and orbiting
   cameras (06) all play to the width.
 - **Anti-alias everything.** Prefer `smoothstep` over `step`; hard edges land
-  between LEDs and stair-step. The renderer supersamples (`--scale 4`) which
-  helps, but soft edges in the shader help more.
+  between LEDs and stair-step. The renderer supersamples (`--scale 2` by
+  default) which helps, but soft edges in the shader help more.
 
 ## Where to go next
 

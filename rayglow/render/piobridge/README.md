@@ -2,7 +2,8 @@
 
 Replaces the 1-lane SPI transport with a **4-lane source-synchronous parallel
 bus** driven by the Pi 5's RP1 PIO block, lifting the link off the critical path
-(a 32 KB frame goes from ~6.6 ms at 40 MHz SPI to ~1.3 ms at clkdiv 2).
+(the 64 KB frame goes from ~13 ms at 40 MHz SPI to ~2 ms at clkdiv 3 / ~1.3 ms
+at clkdiv 2). This is the **default transport** (`--transport pio`).
 
 (4 lanes, not 8: the RP2350 board exposes GP0–27 and the scan-out engine owns
 GP0–18, leaving only GP19–27 for the link — see `phase6_parallel.rs`.)
@@ -54,8 +55,8 @@ some) before wiring.
 3. Flash the firmware: `cd firmware ; and cargo run --bin phase6-parallel`.
 4. Run the renderer with the parallel transport:
    ```fish
-   cd /tmp   # local CWD — lgpio FIFO can't live on the network mount
-   sudo ~/venv/bin/python -m rayglow.render <shader> --transport pio --pio-clkdiv 4
+   cd /tmp   # local CWD — keeps lgpio's runtime FIFO out of the synced repo tree
+   sudo ~/venv/bin/python -m rayglow.render <shader> --pio-clkdiv 4   # pio is the default transport
    ```
 
 ## Bring-up order (don't skip)
@@ -71,4 +72,4 @@ some) before wiring.
    must be pixel-identical (same bytes). Then lower `--pio-clkdiv` toward 1 and
    watch `rx fps` / drops; the READY handshake self-paces exactly as SPI did.
 
-`--transport spi` (default) stays the proven fallback throughout.
+`--transport spi` stays the proven fallback throughout.

@@ -3,8 +3,11 @@
 The custom PCB that sits between the **Waveshare RP2350-PiZero** dev board and the
 LED wall. It is deliberately minimal: it does **3.3 V → 5 V level-shifting** of all
 HUB75 logic (via `SN74AHCT245` buffers), presents the **two HUB75 connectors**
-(chains A & B = one 256×64 tile), breaks out the spare GPIO + power for the Pi 5 ↔
-RP2350 SPI link, and carries a dedicated 5 V rail for the buffers. It does **not**
+(chains A & B = one 256×64 tile), breaks out the spare GPIO + power on J4 — which
+now carries the Pi 5 ↔ RP2350 **4-lane parallel link** (DATA0–3/DCLK/READY, see
+[`../rayglow/render/piobridge/README.md`](../rayglow/render/piobridge/README.md);
+designed pre-fab as an SPI/sync breakout, same pins) — and carries a dedicated 5 V
+rail for the buffers. It does **not**
 power the panels (their 5 V goes straight to the panel lugs) and contains no MCU
 support circuitry — the dev board owns crystal/flash/USB/core power.
 
@@ -28,10 +31,12 @@ this HAT.
 ```
 hardware/
 ├── NET-SPEC.md / PIZERO-HEADER-PINOUT.md / NETLIST-REVIEW.md   # design docs
+├── POWER-AND-GROUNDING.md           # bench-measured power/ground findings
 ├── gen_hat.py / gen_hat_sklib.py    # SKiDL schematic generators (uv project)
 ├── pyproject.toml / uv.lock         # SKiDL + KiCad-symbol deps for the above
 ├── rp2350-hub75-hat.net             # generated netlist
 ├── rp2350-rgb-pcb/                  # the KiCad project (.kicad_pcb/.pro/.sch)
+├── 3dprint/                         # enclosure STLs (base + cover)
 └── fab/                             # plotted Gerbers + drill files (the fab deliverable)
 ```
 

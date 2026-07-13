@@ -60,7 +60,7 @@ RayGLow neither vendors nor redistributes any of it.
 RayGLow started life driving the panels directly from a Raspberry Pi with Henner Zeller's
 `rpi-rgb-led-matrix` C++/Cython library, and its pixel-mapper / bit-plane math was
 background reading for the firmware. That direct-drive output path has since been retired
-in favor of the RP2350 SPI link, so RayGLow no longer depends on, links, or vendors any
+in favor of the RP2350 link, so RayGLow no longer depends on, links, or vendors any
 of it. Thanks to hzeller and contributors for the library that made the first version
 possible.
 

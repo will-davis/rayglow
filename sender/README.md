@@ -3,12 +3,17 @@
 The broadcast half of RayGLow. `sender.py` (one file) captures whatever the desktop is
 playing, reduces it to a handful of per-frame audio features, and unicasts them over UDP
 at ~60 Hz to the Pi, which renders them as GLSL and drives a 256×64 HUB75 wall (via an
-RP2350 over SPI). For the system-level picture and the renderer, see the
-[top-level README](../README.md).
+RP2350 over a 4-lane parallel PIO bus). For the system-level picture and the renderer,
+see the [top-level README](../README.md).
 
 This is a standalone uv project: it shares no code with the `rayglow` package — only the
 **packet contract** (mirrored in `rayglow/feed/receiver.py`). The daemon only ever
 *runs* on the desktop, since it's capturing desktop audio.
+
+Two hardware senders live alongside it, for feeding the wall from a room microphone
+instead of the desktop's audio: [`esp32-mic/`](esp32-mic/) (ESP32 + I2S mic firmware
+that computes the same features on-chip) and [`espnow-dongle/`](espnow-dongle/) (an
+ESP-NOW → UDP bridge for the Pi). Each has its own README.
 
 ## Running
 

@@ -65,7 +65,10 @@ aren't:
 - The send loop is wall-clock paced (`next_tick += 1/fps`), latest-wins on the receiver
   side; never block sending on capture state.
 
-## Planned (not yet built)
+## Microphone input
 
-A microphone input mode (alternative capture source alongside the sink monitor) is the
-next feature here — keep the capture path factored so a second source slots in cleanly.
+The microphone path exists as two sibling sub-projects rather than a `sender.py` mode:
+`esp32-mic/` (ESP32 + I2S mic firmware computing the same features on-chip, speaking
+the same packet contract) and `espnow-dongle/` (ESP-NOW → UDP bridge + `pi_bridge.py`
++ systemd unit on the Pi). Keep `sender.py`'s capture path factored anyway — a local
+mic source may still slot in someday.

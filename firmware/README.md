@@ -3,9 +3,10 @@
 Zero-CPU HUB75 RGB-matrix scan-out engine for the **RP2350** (PIO + DMA),
 driving 8× 64×32 panels (256×64) over two parallel chains. This is the
 downstream end of the RayGLow pipeline: the Pi 5 renders + packs frames and
-ships them over SPI (see the repo-root [`README.md`](../README.md)); this
-firmware receives them and drives the panels with deterministic, jitter-free
-timing. The crate (named `rp2350-rgb-driver`) implements the design in
+ships them over the 4-lane parallel PIO bus (SPI as fallback — see the
+repo-root [`README.md`](../README.md)); this firmware receives them and drives
+the panels with deterministic, jitter-free timing. The crate (named
+`rp2350-rgb-driver`, its original standalone-repo name) implements the design in
 [`docs/design-history/PROJECT-PLAN.md`](../docs/design-history/PROJECT-PLAN.md)
 one verifiable phase at a time.
 
@@ -18,9 +19,11 @@ one verifiable phase at a time.
 | **3a** | Single-chain depth: 4 daisy-chained panels → 256×32 (SI test §11.7) | ✅ hardware-verified — SI clean at 37.5 MHz | `phase3-row` |
 | **2** | Widen data path to 2 parallel chains (`out pins, 16`, `u16` cell) | engine done + init-verified — needs a 2nd panel on chain B | `phase2-dualchain` |
 | **4** | Bulk frame repack + animation, double-buffered | ✅ hardware-verified — ~159 fps @ 64×64 (debug) | `phase4-anim` |
-| 3 | Both chains × 4 deep → full 256×64 + coordinate mapper | not started | — |
-| **5** | Pi 5 → RP2350 SPI link (PIO SPI-slave RX + DMA into the inactive FB) | in progress — `phase5_spi.rs` receives 64 KB frames; brought up against the rpi5 `render/spi_out.py` | `phase5-spi` |
-| **X** | **Single-chain** stop-gap: full 256×64 on ONE 8-panel serpentine chain via the spare Adafruit HAT (level-shifter only), SPI-fed. Uses the `u8` single-chain engine (`src/single.rs`, `Display1`) — 64 KB frames (not 128), `Display::flip` | ✅ streaming verified; `u8` engine boot-verified (scan-out pending panel recheck) | `phase-experimental` |
+| 3 | Both chains × 4 deep → full 256×64 + coordinate mapper | superseded — the full wall runs via Phase 6 `--features two-chain` | — |
+| **5** | Pi 5 → RP2350 SPI link (PIO SPI-slave RX + DMA into the inactive FB) | ✅ hardware-verified — now the **fallback** transport (`--transport spi`) | `phase5-spi` |
+| **X** | **Single-chain** stop-gap: full 256×64 on ONE 8-panel serpentine chain via the spare Adafruit HAT (level-shifter only), SPI-fed. Uses the `u8` single-chain engine (`src/single.rs`, `Display1`) — 64 KB frames (not 128), `Display::flip` | retired with the custom HAT (kept for A/B rigs) | `phase-experimental` |
+| **6** | **Pi 5 → RP2350 4-lane parallel link** (RP1-PIO TX → PIO1 RX + DMA into the inactive FB), single- or two-chain via the `two-chain` cargo feature | ✅ hardware-verified on the custom HAT — **the production transport** | `phase6-parallel` |
+| QC | Custom-HAT board bring-up / pin-by-pin self-test | utility, not a milestone | `qc-test` |
 
 > Note: `phase3-row` (single-chain 256×32) is run *before* the Phase 2 two-chain
 > widening — a deliberate reorder to retire the signal-integrity risk early using
@@ -47,6 +50,7 @@ firmware/
 ├── .cargo/config.toml     # target, probe-rs runner, linker rustflags
 ├── src/
 │   ├── lib.rs             # core HUB75 engine: DisplayMemory, PIO programs, DMA chain
+│   ├── single.rs          # single-chain u8-cell engine (half-size frames)
 │   ├── dma.rs             # low-level per-channel DMA register access (ported kjagiello)
 │   └── lut.rs             # CIE/gamma LUT (ported kjagiello; matches render/hub75.py)
 └── src/bin/
@@ -55,7 +59,10 @@ firmware/
     ├── phase2_dualchain.rs# widen data path to 2 parallel chains
     ├── phase3_row.rs      # 1 chain × 4 panels = 256×32 (SI test)
     ├── phase4_anim.rs     # full 256×64 animated + bulk repack, double-buffered
-    └── phase5_spi.rs      # Pi 5 → RP2350 SPI link (production path)
+    ├── phase5_spi.rs      # Pi 5 → RP2350 SPI link (fallback transport)
+    ├── phase6_parallel.rs # Pi 5 → RP2350 4-lane parallel link (PRODUCTION; two-chain feature)
+    ├── phase_experimental.rs # single-chain serpentine stop-gap (Adafruit-HAT era)
+    └── qc_test.rs         # custom-HAT board bring-up self-test
 ```
 
 ## Toolchain bootstrap (one time)

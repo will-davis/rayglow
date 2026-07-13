@@ -2,7 +2,7 @@
 
 ## Summary
 
-Lowering `--scale` from the default of 4 to 1 or 2 alone reduced frame latency dramatically. The supersampled FBO (scale=4 → 1024×256) forces V3D to shade 4× the pixels and read back ~1MB per frame, all for a display that resolves to 256×64 physical LEDs.
+Lowering `--scale` from 4 to 1 or 2 alone reduced frame latency dramatically. The supersampled FBO (scale=4 → 1024×256) forces V3D to shade 4× the pixels and read back ~1MB per frame, all for a display that resolves to 256×64 physical LEDs. (**Since actioned: the default is now `--scale 2`.**)
 
 This document captures the full bottleneck analysis of the render pipeline, ordered by expected impact.
 
