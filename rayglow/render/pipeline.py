@@ -7,6 +7,7 @@ directives in each pass's source (re-applied on hot reload) plus CLI
 """
 import datetime
 
+from . import output
 from . import passes
 from . import textures
 from .output import Readback
@@ -33,15 +34,39 @@ class ShaderToy:
     panel-ready (H, W, 3) uint8 numpy array.
     """
 
-    def __init__(self, width, height, scale=2, gamma=1.2, base_dir=None,
-                 use_pbo=False):
+    def __init__(self, width, height, scale=2, gamma=1.0, base_dir=None,
+                 readback="auto", resolve_flip=(False, False), use_pbo=False,
+                 quiet=False):
+        """readback: 'auto' | 'dmabuf' | 'dmabuf-pipe' | 'glread' use the GPU
+        resolve pass (downsample+gamma+orientation on V3D) and the matching
+        reader — `gamma` is baked into that pass, so feed the packer
+        hub75.LUT_IDENTITY when it isn't 1.0.  'legacy' is the original
+        full-size glReadPixels + CPU postprocess path (honors use_pbo);
+        there `gamma` is applied by the CPU LUT as before."""
         self.width, self.height, self.scale = width, height, scale
         self.base_dir = base_dir          # directive image paths resolve here
         # Unused samplers bind to this 1x1 black texture so they're valid.
         self.dummy_tex = passes.make_texture(1, 1, bytes(4))
         self.passes = {"image": passes.Pass("image", width * scale,
                                             height * scale, self.dummy_tex)}
-        self.readback = Readback(width, height, scale, gamma, use_pbo=use_pbo)
+        self.legacy = readback == "legacy"
+        if self.legacy:
+            self.readback = Readback(width, height, scale, gamma,
+                                     use_pbo=use_pbo)
+            self.resolve = self.reader = None
+        else:
+            self.readback = None
+            self.resolve = output.make_resolve(
+                width, height, scale, gamma,
+                self.passes["image"].out_tex, self.dummy_tex,
+                flip=resolve_flip)
+            # render() repoints resolve.fbo at the reader's per-frame target;
+            # remember the pass's own FBO so destroy() frees the right one.
+            self._resolve_home_fbo = self.resolve.fbo
+            self.reader, desc = output.make_reader(
+                readback, self.resolve.fbo, width, height)
+            if not quiet:
+                print(f"readback: {desc}")
         self.audio_channels = []          # live list; AudioFeed iterates it
         self.buffer_format = passes.pick_buffer_format()
         self._cli_specs = {}              # image-pass overrides {index: spec}
@@ -51,17 +76,23 @@ class ShaderToy:
 
     def destroy(self):
         """Free every GL object this toy owns: passes (programs + render
-        targets), cached channel textures, the dummy texture, and the
-        readback's PBOs.  Call before dropping a toy (e.g. --loop switch) so
-        rebuilds don't leak FBOs/textures into the Pi's shared RAM.  Buffer
-        channels own no texture; texture-backed channels each own one."""
+        targets), the resolve pass + reader (dmabuf fds/EGLImages) or the
+        legacy readback's PBOs, cached channel textures, and the dummy
+        texture.  Call before dropping a toy (e.g. --loop switch) so rebuilds
+        don't leak FBOs/textures into the Pi's shared RAM.  Buffer channels
+        own no texture; texture-backed channels each own one."""
         for p in self.passes.values():
             p.destroy()
         from .egl import delete_texture
         for ch in self._cache.values():
             delete_texture(getattr(ch, "texture", 0))
         delete_texture(self.dummy_tex)
-        self.readback.destroy()
+        if self.legacy:
+            self.readback.destroy()
+        else:
+            self.resolve.fbo = self._resolve_home_fbo
+            self.resolve.destroy()
+            self.reader.destroy()
         self.passes = {}
         self._cache = {}
         self.audio_channels = []
@@ -155,4 +186,11 @@ class ShaderToy:
             if p is not None:
                 p.render(st, self.passes)
         self.image.render(st, self.passes)
-        return self.readback.read(self.image.fbo)
+        if self.legacy:
+            return self.readback.read(self.image.fbo)
+        # Resolve pass: image texture -> panel-resolution frame, rendered
+        # into whichever target the reader wants this frame (dmabuf
+        # ping-pong slots, or its own texture FBO for glread).
+        self.resolve.fbo = self.reader.target_fbo(frame)
+        self.resolve.render(st)
+        return self.reader.read(frame)

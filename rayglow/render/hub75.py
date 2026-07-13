@@ -14,9 +14,10 @@ firmware + this file in lockstep.
 
 Wire format (the "full display" = chain/row A over chain/row B):
   - Wall   : WALL_WIDTH x WALL_HEIGHT (256 x 64), BITDEPTH planes, gamma PACK_GAMMA
-  - Input  : numpy uint8 (WALL_HEIGHT, WALL_WIDTH, 3), LINEAR RGB, C-contiguous.
-             LINEAR because this packer owns gamma; the render readback must run
-             at gamma 1.0 or color double-corrects.
+  - Input  : numpy uint8 (WALL_HEIGHT, WALL_WIDTH, 3), C-contiguous. With the
+             default LUT the input must be LINEAR RGB (the LUT applies gamma);
+             frames that the GPU resolve pass already gamma-corrected are packed
+             with LUT_IDENTITY instead — gamma is applied exactly once either way.
   - Output : WALL_WIDTH*WALL_HEIGHT/2*BITDEPTH * 2 bytes (65536), u16 LE.
 
 Cell index (matches firmware exactly):
@@ -73,6 +74,13 @@ def build_gamma_lut() -> np.ndarray:
 
 
 _LUT = build_gamma_lut()
+
+# For frames that arrive ALREADY gamma-corrected (the GPU resolve pass bakes
+# pow(x, PACK_GAMMA) into its shader): identity LUT = the packer's lookup
+# becomes a pure uint8->uint16 widening, and gamma is not applied twice.
+# The default _LUT path (LINEAR input) is unchanged and stays what
+# tools/verify.py proves byte-identical to the firmware.
+LUT_IDENTITY = np.arange(1 << B, dtype=np.uint16)
 
 # Per-row geometry, precomputed once.
 _rows = np.arange(WALL_H)

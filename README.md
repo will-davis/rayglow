@@ -46,9 +46,10 @@ Bit-banging HUB75 from a Linux SoC fights the scheduler — it needs a dedicated
 and still jitters (the Pi 5's RP1 southbridge made it worse). The RP2350b runs the refresh
 loop entirely in **3 PIO state machines + 4 self-chaining DMA channels**, with the CPU
 never touching the pixel path. The Pi renders at whatever rate it likes and ships 64 KB
-frames over the link — already gamma-corrected by the packer's CIE LUT (a bit-exact
-replica of the firmware's `lut.rs`, so the Pi's render readback stays LINEAR); the
-RP2350b holds a rock-steady, flicker-free refresh.
+frames over the link — already gamma-corrected on the Pi (the GPU resolve pass bakes
+the firmware `lut.rs` CIE curve into each frame; `--readback legacy` instead applies
+the packer's bit-exact LUT replica to a LINEAR readback); the RP2350b holds a
+rock-steady, flicker-free refresh.
 
 ## Why a parallel bus, not SPI
 
@@ -75,7 +76,7 @@ KiCad project, and fab Gerbers are in [`hardware/`](hardware/).
 |---|---|
 | `sender/` | **desktop half** — the feature daemon (`sender.py`), its own uv project (numpy + sounddevice). [sender/README.md](sender/README.md) has the protocol + feature detail. |
 | `rayglow/feed/` | the audio-feature feed: packet `receiver`, `FeatureState`, and the rig `config` (geometry/network/gamma). Shared, dependency-free. |
-| `rayglow/render/` | **the live renderer** — headless EGL + GLES3, multipass pipeline, iChannel textures (`audio`, `milk`, noise, images), hot reload, the frame packer (`hub75.py`) + link backends (`spi_out.py`, `pio_out.py` / `piobridge/`), and `presets/*.glsl`. |
+| `rayglow/render/` | **the live renderer** — headless EGL + GLES3, multipass pipeline, iChannel textures (`audio`, `milk`, noise, images), hot reload, the GPU resolve pass + zero-copy dma-heap readback (`output.py`, `dmabuf.py`), the frame packer (`hub75.py`) + link backends (`spi_out.py`, `pio_out.py` / `piobridge/`), and `presets/*.glsl`. |
 | `rayglow/fake_sender.py` | music-free test harness; emits the same packet struct with synthesized features. |
 | `rayglow/spi_test.py` | static SPI test pattern (no GL) — isolates the link/firmware from the renderer. |
 | `firmware/` | **RP2350b Rust firmware** — zero-CPU PIO+DMA HUB75 scan-out, brought up in verifiable phases. [firmware/README.md](firmware/README.md). |

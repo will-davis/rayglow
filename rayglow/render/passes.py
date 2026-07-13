@@ -129,6 +129,7 @@ class Pass:
         self.height = height
         self.program = 0                       # last-known-good program
         self._locs = {}
+        self._uvals = {}                       # last value set per uniform
         self.channels = [Channel(texture=dummy_texture) for _ in range(4)]
         self.double_buffered = double_buffered
         if double_buffered:
@@ -183,13 +184,31 @@ class Pass:
         self.program = prog
         self._locs = {n: egl.glGetUniformLocation(prog, n.encode())
                       for n in _UNIFORMS}
+        self._uvals = {}       # fresh program => every uniform must be re-set
         return True, "\n".join(warnings)
 
     # -- per-frame ----------------------------------------------------------
+    # Uniform values live in the program object and persist across frames, so
+    # re-uploading unchanged ones (iResolution, sampler indices, iMouse, ...)
+    # only pays ctypes overhead for nothing — _uvals skips them.  The cache is
+    # cleared on compile() (new program = undefined uniforms), which is what
+    # keeps hot reload correct.
+
     def _set(self, name, setter, *vals):
         loc = self._locs.get(name, -1)
-        if loc != -1:
-            setter(loc, *vals)
+        if loc == -1 or self._uvals.get(name) == vals:
+            return
+        self._uvals[name] = vals
+        setter(loc, *vals)
+
+    def _set_fv(self, name, setter, count, vals):
+        """Array uniform (glUniform*fv): `vals` is a plain tuple so the cache
+        can compare it; the ctypes array is built only on an actual upload."""
+        loc = self._locs.get(name, -1)
+        if loc == -1 or self._uvals.get(name) == vals:
+            return
+        self._uvals[name] = vals
+        setter(loc, count, (c_float * len(vals))(*vals))
 
     def render(self, state, frame_ctx=None):
         """Draw the fullscreen triangle with this pass's program.
@@ -214,17 +233,15 @@ class Pass:
         self._set("iDate", egl.glUniform4f, *state.date)
 
         t = state.time
-        self._set("iChannelTime[0]", egl.glUniform1fv, 4,
-                  (c_float * 4)(t, t, t, t))
-        res = (c_float * 12)()
+        self._set_fv("iChannelTime[0]", egl.glUniform1fv, 4, (t, t, t, t))
+        res = []
         for i, ch in enumerate(self.channels):
             egl.glActiveTexture(GL_TEXTURE0 + i)
             # resolve first: buffer channels update width/height here
             egl.glBindTexture(GL_TEXTURE_2D, ch.resolve_texture(frame_ctx))
-            res[3 * i], res[3 * i + 1], res[3 * i + 2] = \
-                float(ch.width), float(ch.height), 1.0
+            res += (float(ch.width), float(ch.height), 1.0)
             self._set(f"iChannel{i}", egl.glUniform1i, i)
-        self._set("iChannelResolution[0]", egl.glUniform3fv, 4, res)
+        self._set_fv("iChannelResolution[0]", egl.glUniform3fv, 4, tuple(res))
 
         egl.glDrawArrays(GL_TRIANGLES, 0, 3)
         if self.double_buffered:

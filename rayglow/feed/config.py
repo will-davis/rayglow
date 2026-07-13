@@ -22,8 +22,10 @@ PARALLEL_CHAINS = 2                    # HUB75 chains driven in parallel by the 
 WALL_WIDTH = COLS * CHAIN              # 256 (same width as one chain)
 WALL_HEIGHT = ROWS * PARALLEL_CHAINS   # 64 (two stacked 32-row chains)
 BITDEPTH = 8                           # BCM planes — must equal firmware B (phase6_parallel.rs)
-PACK_GAMMA = 2.1                       # CIE gamma the packer applies (mirrors firmware lut.rs) —
-                                       # the render readback must stay LINEAR (gamma 1.0)
+PACK_GAMMA = 2.1                       # CIE gamma the wall gets (mirrors firmware lut.rs).
+                                       # Applied ONCE: baked into the GPU resolve pass by
+                                       # default (packer gets LUT_IDENTITY), or by the
+                                       # packer's LUT in --readback legacy (LINEAR readback)
 
 # Physical-install orientation (rig-specific — see LOCAL-SETUP). A wall that
 # takes HUB75 data on the RIGHT of each chain, with panels mounted inverted vs

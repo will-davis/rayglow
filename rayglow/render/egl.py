@@ -73,6 +73,25 @@ GL_PIXEL_PACK_BUFFER = 0x88EB
 GL_STREAM_READ = 0x88E1
 GL_MAP_READ_BIT = 0x0001
 
+GL_RENDERBUFFER = 0x8D41
+
+# EGL_EXT_image_dma_buf_import — import a dma-buf as an EGLImage (dmabuf.py).
+EGL_LINUX_DMA_BUF_EXT = 0x3270
+EGL_LINUX_DRM_FOURCC_EXT = 0x3271
+EGL_DMA_BUF_PLANE0_FD_EXT = 0x3272
+EGL_DMA_BUF_PLANE0_OFFSET_EXT = 0x3273
+EGL_DMA_BUF_PLANE0_PITCH_EXT = 0x3274
+EGL_DMA_BUF_PLANE0_MODIFIER_LO_EXT = 0x3443
+EGL_DMA_BUF_PLANE0_MODIFIER_HI_EXT = 0x3444
+EGL_WIDTH = 0x3057
+EGL_HEIGHT = 0x3056
+
+# EGL_KHR_fence_sync — CPU-side wait for queued GPU work (dmabuf.Fence).
+EGL_SYNC_FENCE_KHR = 0x30F9
+EGL_SYNC_FLUSH_COMMANDS_BIT_KHR = 0x0001
+EGL_FOREVER_KHR = 0xFFFFFFFFFFFFFFFF
+EGL_CONDITION_SATISFIED_KHR = 0x30F6
+
 # ---------------------------------------------------------------------------
 # Function signatures
 # ---------------------------------------------------------------------------
@@ -168,6 +187,30 @@ glReadPixels = _bind(_gl, "glReadPixels", None,
                      [c_int, c_int, c_int, c_int, c_uint, c_uint, c_void_p])
 glGetError = _bind(_gl, "glGetError", c_uint, [])
 glGetString = _bind(_gl, "glGetString", c_char_p, [c_uint])
+
+# EGL/GL extension entry points must come from eglGetProcAddress (the .so may
+# not export them). dmabuf.py binds its extension functions through this.
+eglGetProcAddress = _bind(_egl, "eglGetProcAddress", c_void_p, [c_char_p])
+eglGetCurrentDisplay = _bind(_egl, "eglGetCurrentDisplay", c_void_p, [])
+
+
+def load_ext(name, restype, argtypes):
+    """Bind an EGL/GL extension function, or raise GLError if absent."""
+    addr = eglGetProcAddress(name.encode())
+    if not addr:
+        raise GLError(f"extension function {name} not available")
+    return ctypes.CFUNCTYPE(restype, *argtypes)(addr)
+
+
+# GL — renderbuffers (dmabuf.py attaches an EGLImage as the render target).
+glGenRenderbuffers = _bind(_gl, "glGenRenderbuffers", None,
+                           [c_int, POINTER(c_uint)])
+glBindRenderbuffer = _bind(_gl, "glBindRenderbuffer", None, [c_uint, c_uint])
+glDeleteRenderbuffers = _bind(_gl, "glDeleteRenderbuffers", None,
+                              [c_int, POINTER(c_uint)])
+glFramebufferRenderbuffer = _bind(_gl, "glFramebufferRenderbuffer", None,
+                                  [c_uint, c_uint, c_uint, c_uint])
+glFlush = _bind(_gl, "glFlush", None, [])
 
 # GL — pixel buffer objects (async readback). glReadPixels into a bound
 # GL_PIXEL_PACK_BUFFER returns immediately (the last arg becomes a byte offset,

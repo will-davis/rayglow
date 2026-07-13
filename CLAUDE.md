@@ -19,9 +19,11 @@ pipeline diagram and the repo map. The pieces:
   - `rayglow/feed/` — the audio-feature feed (packet `receiver`, `FeatureState`,
     rig `config`). Neutral, shared, dependency-free; the future yaml-config target.
   - `rayglow/render/` — **the live renderer**: headless EGL + GLES3 GPU rendering of
-    Shadertoy-dialect shaders, then `hub75.py` packs each frame and `pio_out.py`
-    (default; `piobridge/` C shim over RP1 piolib) or `spi_out.py` (fallback) ships
-    it to the RP2350. Entry: `python -m rayglow.render`.
+    Shadertoy-dialect shaders; a GPU resolve pass (`output.py`) downsamples + gammas +
+    orients each frame, read back zero-copy through a dma-heap mmap (`dmabuf.py`,
+    glReadPixels fallback), then `hub75.py` packs it and `pio_out.py` (default;
+    `piobridge/` C shim over RP1 piolib) or `spi_out.py` (fallback) ships it to the
+    RP2350. Entry: `python -m rayglow.render`.
   - `rayglow/fake_sender.py` — music-free test harness, same packet struct.
   - `rayglow/spi_test.py` — static test pattern over the SPI fallback (no GL) to
     isolate link/firmware; `tools/pio_ramp.py` is the parallel-bus equivalent for
@@ -63,10 +65,18 @@ them.
     `firmware/src/lib.rs`). The packer and the firmware are a **1:1 port of each other**;
     change one and you change both. `tools/verify.py` builds a Rust golden frame and
     asserts they're byte-identical — run it after any layout/gamma change.
-- **The packer owns gamma; the render readback stays LINEAR.** `config.PACK_GAMMA` (2.1)
-  is applied by the packer's CIE LUT (a bit-exact replica of firmware `lut.rs`; the
-  firmware itself never touches streamed frames), so the renderer reads back at gamma
-  1.0. Correcting gamma on the Pi too would double-correct.
+- **Gamma is applied exactly once, and where depends on the readback mode.**
+  `config.PACK_GAMMA` (2.1, mirrors firmware `lut.rs`; the firmware never touches
+  streamed frames) is baked into the GPU resolve pass by default, so `run_wall` feeds
+  the packer `hub75.LUT_IDENTITY` — giving it the CIE LUT too would double-correct.
+  In `--readback legacy` the old contract holds: LINEAR readback, packer applies its
+  CIE LUT (that pairing is what `tools/verify.py` pins to the firmware). Dry-runs
+  stay LINEAR (`--gamma`, default 1.0) in every mode.
+- **The resolve pass owns orientation too.** The GL bottom-left origin flip and
+  `config.FLIP_V/FLIP_H` are baked into its sampling coordinates on wall runs; only
+  legacy mode still flips on the CPU. Readback is zero-copy dma-heap mmap
+  (`render/dmabuf.py`) where Mesa+dma-heaps exist, `glReadPixels` elsewhere — never
+  "fix" the auto-fallback message on desktop dry-runs; it's expected.
 - **Import direction:** `render` imports *up* into `feed`; keep `feed` dependency-free of
   the renderer (no GL/SPI imports at module load). SPI deps (`spidev`/`gpiozero`/`lgpio`)
   are Pi-only, optional (`.[pi]`), and imported lazily so the desktop dry-run never needs

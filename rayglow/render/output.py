@@ -1,11 +1,190 @@
-"""Frame postprocessing (GPU readback -> panel-ready uint8) and dry-run sinks."""
+"""Frame output: GPU resolve pass + readback strategies, and dry-run sinks.
+
+Two generations coexist here:
+
+- The CURRENT path: a GPU "resolve" pass (make_resolve) box-averages the
+  supersampled image texture down to panel resolution, applies gamma, and
+  orients the frame so memory row 0 is the wall's top row — the CPU
+  postprocess stage disappears entirely.  A reader (make_reader) then hands
+  the 64 KB frame to Python: DmabufReader renders straight into a dma-heap
+  buffer and reads it through a cached mmap (zero-copy, see dmabuf.py);
+  GlReadResolveReader is the portable glReadPixels fallback (desktop
+  dry-runs, non-Mesa stacks).  Measured on the Pi 5 (tools/dmabuf_probe.py):
+  2.4x faster than the legacy path at scale 2, with no added latency.
+
+- The LEGACY path (--readback legacy): full-size glReadPixels + numpy
+  box-sum/LUT/flip postprocess (class Readback below), kept as a regression
+  escape hatch and for the PBO provenance notes.
+"""
 import ctypes
 
 import numpy as np
 
 from . import egl
+from . import passes
 from .egl import (GL_FRAMEBUFFER, GL_MAP_READ_BIT, GL_PIXEL_PACK_BUFFER,
                   GL_RGBA, GL_STREAM_READ, GL_UNSIGNED_BYTE)
+
+
+# ---------------------------------------------------------------------------
+# GPU resolve pass
+# ---------------------------------------------------------------------------
+# Downsample + gamma + orientation in one fragment shader (optimization-paths
+# items 3+4+8).  Written as a Shadertoy mainImage so it reuses the Pass
+# machinery; the constants are baked in with str.format because they are
+# fixed for the life of the process (hot reload never touches this pass).
+#
+# Row mapping: glReadPixels and a linear dmabuf both lay out GL row 0 (bottom)
+# first in memory, and the wall wants row 0 = top — so output row y samples
+# source rows [(H-1-y)*s, (H-y)*s), i.e. the vertical flip that the legacy
+# CPU postprocess did with [::-1] is folded into the sampling coordinates.
+# config.FLIP_V/FLIP_H (physical mount compensation) fold in the same way.
+RESOLVE_SRC = """
+void mainImage(out vec4 o, in vec2 fc) {{
+    ivec2 d = ivec2(fc);
+    int y0 = ({y_expr}) * {s};
+    int x0 = ({x_expr}) * {s};
+    vec3 a = vec3(0.0);
+    for (int j = 0; j < {s}; j++)
+        for (int i = 0; i < {s}; i++)
+            a += texelFetch(iChannel0, ivec2(x0 + i, y0 + j), 0).rgb;
+    o = vec4({gamma_expr}, 1.0);
+}}
+"""
+
+
+def make_resolve(width, height, scale, gamma, src_tex, dummy_tex,
+                 flip=(False, False)):
+    """Build the panel-resolution resolve Pass sampling `src_tex` (the image
+    pass's supersampled output texture).
+
+    gamma != 1.0 bakes `pow(avg, gamma)` into the shader — quantization to
+    8 bits then happens ONCE, from float, instead of the legacy path's
+    8-bit-readback-then-8-bit-LUT double quantization (better dark-end
+    gradients).  The packer must then be fed an identity LUT
+    (hub75.LUT_IDENTITY) or gamma double-corrects.
+
+    flip = (flip_v, flip_h): config.FLIP_V/FLIP_H for the wall path; keep
+    (False, False) for dry-runs, which historically never applied mount flips.
+    """
+    flip_v, flip_h = flip
+    a = f"a * {1.0 / (scale * scale):.10f}"
+    src = RESOLVE_SRC.format(
+        s=scale,
+        y_expr=("d.y" if flip_v else f"{height} - 1 - d.y"),
+        x_expr=(f"{width} - 1 - d.x" if flip_h else "d.x"),
+        gamma_expr=(a if gamma == 1.0 else f"pow({a}, vec3({gamma!r}))"))
+    rp = passes.Pass("resolve", width, height, dummy_tex)
+    ok, msg = rp.compile(src)
+    if not ok:
+        raise egl.GLError(f"resolve shader failed to compile (bug): {msg}")
+    rp.channels[0] = passes.Channel("texture", src_tex,
+                                    width * scale, height * scale)
+    return rp
+
+
+# ---------------------------------------------------------------------------
+# Readers: resolve-pass FBO -> (H, W, 3) uint8
+# ---------------------------------------------------------------------------
+class GlReadResolveReader:
+    """Portable reader: glReadPixels the resolve pass's own texture FBO.
+
+    Still a big win over legacy — the read is 64 KB of final pixels instead
+    of the supersampled frame, and there is no CPU postprocess.
+    """
+
+    def __init__(self, resolve_fbo, width, height):
+        self._fbo = resolve_fbo
+        self.w, self.h = width, height
+        self._buf = np.empty((height, width, 4), np.uint8)
+
+    def target_fbo(self, frame):
+        return self._fbo
+
+    def read(self, frame):
+        egl.glBindFramebuffer(GL_FRAMEBUFFER, self._fbo)
+        egl.glReadPixels(0, 0, self.w, self.h, GL_RGBA, GL_UNSIGNED_BYTE,
+                         self._buf.ctypes.data_as(ctypes.c_void_p))
+        return np.ascontiguousarray(self._buf[:, :, :3])
+
+    def destroy(self):
+        pass                        # the FBO belongs to the resolve pass
+
+
+class DmabufReader:
+    """Zero-copy reader: the resolve pass renders into a dma-heap buffer and
+    the CPU reads it through a cached mmap (see dmabuf.py for why this beats
+    both glReadPixels and PBOs on V3D).
+
+    pipelined=False (default): fence-wait this frame, read it.  No added
+    latency; the fence covers GPU work that glReadPixels would also have
+    waited for.
+
+    pipelined=True: ping-pong two buffers and read frame N-1 while the GPU
+    renders frame N — hides the whole GPU render behind the CPU pack stage
+    at the cost of ONE frame of visual latency.  The first frame (and the
+    first after a --loop switch) is read synchronously so callers never see
+    a missing frame.
+    """
+
+    def __init__(self, width, height, pipelined=False, heap="system"):
+        from .dmabuf import DmaBufTarget
+        self.pipelined = pipelined
+        n = 2 if pipelined else 1
+        self.targets = [DmaBufTarget(width, height, heap) for _ in range(n)]
+        self._fences = {}
+
+    def target_fbo(self, frame):
+        return self.targets[frame % len(self.targets)].fbo
+
+    def _read_target(self, tgt):
+        tgt.begin_read()
+        out = np.ascontiguousarray(tgt.view[:, :, :3])
+        tgt.end_read()
+        return out
+
+    def read(self, frame):
+        from .dmabuf import Fence
+        if not self.pipelined:
+            Fence().wait()
+            return self._read_target(self.targets[0])
+        i = frame % 2
+        self._fences[i] = Fence()
+        egl.glFlush()
+        prev = self._fences.pop(i ^ 1, None)
+        if prev is None:            # prime frame: read this one synchronously
+            self._fences.pop(i).wait()
+            return self._read_target(self.targets[i])
+        prev.wait()                 # normally already signaled
+        return self._read_target(self.targets[i ^ 1])
+
+    def destroy(self):
+        for f in self._fences.values():
+            f.wait()
+        self._fences = {}
+        for t in self.targets:
+            t.destroy()
+
+
+def make_reader(mode, resolve_fbo, width, height):
+    """Build the reader for --readback `mode` ('auto', 'dmabuf',
+    'dmabuf-pipe', 'glread').  Returns (reader, description).  'auto' tries
+    the zero-copy dmabuf path and falls back to glReadPixels — expected on
+    non-Mesa/non-dma-heap stacks like the desktop's EGL."""
+    if mode in ("dmabuf", "dmabuf-pipe", "auto"):
+        try:
+            r = DmabufReader(width, height, pipelined=(mode == "dmabuf-pipe"))
+            return r, ("dmabuf zero-copy"
+                       + (" (pipelined, +1 frame latency)"
+                          if mode == "dmabuf-pipe" else ""))
+        except (OSError, egl.GLError) as e:
+            if mode != "auto":
+                raise
+            fallback_note = f" (dmabuf unavailable: {e})"
+    else:
+        fallback_note = ""
+    return (GlReadResolveReader(resolve_fbo, width, height),
+            "glReadPixels" + fallback_note)
 
 
 class Readback:

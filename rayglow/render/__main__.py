@@ -133,12 +133,19 @@ def build_shader(args, use_pbo, shader_path, fatal=True):
     resolve regardless of order; buffers compile first, image last.  CLI
     --channelN overrides apply to the image pass.
 
+    args.render_gamma / args.resolve_flip are derived in main(): the resolve
+    pass bakes them in on the GPU (wall runs get PACK_GAMMA + config flips;
+    dry-runs get --gamma and no flips, as before); legacy mode instead feeds
+    --gamma to the CPU readback LUT.
+
     fatal=True (initial launch): a compile error exits the process.
     fatal=False (--loop switch): a compile error prints, tears the half-built
     toy back down, and returns (None, None) so the caller skips that shader.
     """
     toy = ShaderToy(args.width, args.height, scale=args.scale,
-                    gamma=args.gamma, use_pbo=use_pbo,
+                    gamma=args.render_gamma, use_pbo=use_pbo,
+                    readback=args.readback, resolve_flip=args.resolve_flip,
+                    quiet=not fatal,
                     base_dir=os.path.dirname(os.path.abspath(shader_path)))
     for i in range(4):
         spec = getattr(args, f"channel{i}")
@@ -287,28 +294,37 @@ class _SendPipe:
 def run_wall(toy, watchers, feed, args, use_pbo=False, playlist=None, index=0):
     """Render + pack + ship frames to the rp2350b over the link.
 
-    The render readback is LINEAR (args.gamma left at 1.0) and gets packed
-    into bit-planes (hub75.pack, byte-identical to the firmware — the packer
-    applies the CIE gamma LUT, mirroring firmware lut.rs) before going out over
-    the transport (4-lane parallel PIO bus by default, SPI fallback). The READY
-    handshake self-paces: out.send() blocks until the rp2350b has armed its RX
-    DMA, then pushes one 64 KB transfer.
+    Gamma: the GPU resolve pass bakes pow(x, PACK_GAMMA) into the frame, so
+    the packer gets an identity LUT (LUT_IDENTITY) — applying its CIE LUT too
+    would double-correct.  In --readback legacy the readback is LINEAR and
+    the packer applies the CIE LUT itself, exactly as before (that pairing is
+    what tools/verify.py proves byte-identical to the firmware).  Orientation
+    (config.FLIP_V/FLIP_H) is likewise baked into the resolve pass; only
+    legacy mode still flips on the CPU.
+
+    The frame goes out over the transport (4-lane parallel PIO bus by
+    default, SPI fallback). The READY handshake self-paces: out.send() blocks
+    until the rp2350b has armed its RX DMA, then pushes one 64 KB transfer.
 
     With a `playlist` (--loop), every args.loop seconds the current shader is
     torn down and the next compilable shader in the folder is built fresh —
     `index` tracks the position.  The feed (audio state + UDP socket) and the
     hardware link persist across switches; only the toy is swapped.
     """
-    from .hub75 import pack, pack_single, to_single_chain
+    from .hub75 import (LUT_IDENTITY, build_gamma_lut, pack, pack_single,
+                        to_single_chain)
+
+    legacy = args.readback == "legacy"
+    pack_lut = build_gamma_lut() if legacy else LUT_IDENTITY
 
     # Warm the full render+pack path before opening hardware.
     if feed:
         feed.update(0.0, 1.0 / 60)
     warm = toy.render(0.0, 1.0 / 60, 0)
     if config.SINGLE_CHAIN:
-        pack_single(to_single_chain(warm))
+        pack_single(to_single_chain(warm), pack_lut)
     else:
-        pack(warm)
+        pack(warm, pack_lut)
 
     # Transport: the 4-lane RP1-PIO parallel bus (default) or the 1-lane SPI
     # fallback. Both expose send(bytes)/close(); the byte stream is identical.
@@ -368,21 +384,25 @@ def run_wall(toy, watchers, feed, args, use_pbo=False, playlist=None, index=0):
             if feed:
                 feed.update(now - t0, now - last)
             ta = time.perf_counter()
-            # (H,W,3) uint8 LINEAR; shader clock is per-shader (resets on switch)
+            # (H,W,3) uint8; shader clock is per-shader (resets on switch).
+            # Resolve-pass modes return gamma-corrected, already-oriented
+            # frames; legacy returns LINEAR unflipped ones.
             buf = toy.render(now - shader_t0, now - last, shader_frame)
-            # Physical-install orientation (see config): the wall is rotated 180deg
-            # from the rendered frame, so flip both axes before packing.
-            if config.FLIP_V:
-                buf = buf[::-1]
-            if config.FLIP_H:
-                buf = buf[:, ::-1]
-            buf = np.ascontiguousarray(buf)
+            if legacy:
+                # Physical-install orientation (see config): flip on the CPU;
+                # the resolve pass does this on the GPU in the other modes.
+                if config.FLIP_V:
+                    buf = buf[::-1]
+                if config.FLIP_H:
+                    buf = buf[:, ::-1]
+                buf = np.ascontiguousarray(buf)
             # Single-chain rig: fold the logical wall into the 512-wide serpentine
             # strip (chain A) before packing. pack() infers the wider frame.
             if config.SINGLE_CHAIN:
                 buf = to_single_chain(buf)
             tb = time.perf_counter()
-            payload = pack_single(buf) if config.SINGLE_CHAIN else pack(buf)
+            payload = (pack_single(buf, pack_lut) if config.SINGLE_CHAIN
+                       else pack(buf, pack_lut))
             tc = time.perf_counter()
             # Hand the frame to the worker; it transfers while we render the next.
             # submit() blocks only if the previous transfer hasn't finished.
@@ -444,9 +464,21 @@ def main():
                     help="supersample factor (default 2; 1 = pixel-exact, 4 = "
                          "smoother but ~4x the GPU+readback cost)")
     ap.add_argument("--gamma", type=float, default=1.0,
-                    help="readback gamma (default 1.0 = LINEAR; the packer "
-                         "applies the CIE LUT downstream, so correcting here "
-                         "too would double-correct)")
+                    help="dry-run gamma (default 1.0 = LINEAR). Wall runs "
+                         "ignore this: gamma there is config.PACK_GAMMA, "
+                         "applied on the GPU by the resolve pass (or by the "
+                         "packer's CIE LUT with --readback legacy)")
+    ap.add_argument("--readback", default="auto",
+                    choices=("auto", "dmabuf", "dmabuf-pipe", "glread",
+                             "legacy"),
+                    help="GPU->CPU frame path. auto (default): zero-copy "
+                         "dma-heap readback of the GPU resolve pass, falling "
+                         "back to glReadPixels where dmabuf isn't available "
+                         "(e.g. desktop dry-runs). dmabuf-pipe: ping-pong two "
+                         "buffers — reads frame N-1 while N renders (fastest, "
+                         "+1 frame latency). glread: force the fallback. "
+                         "legacy: the original full-size glReadPixels + CPU "
+                         "postprocess path")
     ap.add_argument("--transport", choices=("spi", "pio"), default="pio",
                     help="link to the rp2350b: 'pio' (4-lane RP1-PIO parallel "
                          "bus, default — needs phase6 firmware + "
@@ -498,9 +530,7 @@ def main():
                          "the Pi's V3D — default is the synchronous path)")
     args = ap.parse_args()
 
-    # Geometry defaults to the full two-chain display (256x64). The render
-    # readback is LINEAR (gamma 1.0) because the packer owns the CIE gamma LUT
-    # (config.PACK_GAMMA) — applying gamma here too would double-correct.
+    # Geometry defaults to the full two-chain display (256x64).
     if args.width is None:
         args.width = config.WALL_WIDTH
     if args.height is None:
@@ -515,9 +545,29 @@ def main():
 
     # PBO async readback is experimental and off by default (slower on V3D, see
     # output.Readback); only ever for the live loop, never dry-run (the one-frame
-    # shift/drop would skew the GIF).
-    use_pbo = (args.dry_run is None) and args.pbo
+    # shift/drop would skew the GIF). It belongs to the legacy readback path.
     dry = args.dry_run is not None
+    use_pbo = (not dry) and args.pbo
+    if args.pbo:
+        args.readback = "legacy"
+    if dry and args.readback == "dmabuf-pipe":
+        # Pipelined reads return frame N-1 — that off-by-one would skew the
+        # GIF, so dry-runs use the synchronous dmabuf reader instead.
+        args.readback = "dmabuf"
+
+    # What the resolve pass bakes in (see build_shader): wall runs get the
+    # firmware gamma + physical mount flips on the GPU; dry-runs keep the
+    # historical semantics (--gamma, no flips). Legacy applies --gamma in the
+    # CPU readback LUT and leaves gamma/flips to the packer/run_wall.
+    if args.readback == "legacy":
+        args.render_gamma = args.gamma
+        args.resolve_flip = (False, False)
+    elif dry:
+        args.render_gamma = args.gamma
+        args.resolve_flip = (False, False)
+    else:
+        args.render_gamma = config.PACK_GAMMA
+        args.resolve_flip = (config.FLIP_V, config.FLIP_H)
     toy, watchers = build_shader(args, use_pbo, args.shader, fatal=True)
 
     feed = AudioFeed(toy.audio_channels,

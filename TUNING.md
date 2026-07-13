@@ -27,7 +27,9 @@ The renderer prints a 5-second rolling line:
   fps  render  pack  send  wait   (PIO floor 2.0ms @ clkdiv 3)
 ```
 
-- **`render`** — GLSL execution + `glReadPixels` readback + flips (main thread).
+- **`render`** — GLSL execution + resolve pass + readback (main thread). The readback
+  is a zero-copy dma-heap mmap by default (`--readback auto`); gamma + orientation
+  ride along in the resolve pass, so there is no CPU postprocess.
 - **`pack`** — numpy bit-plane packing (main thread).
 - **`send`** — the worker thread's actual wire time (overlapped with the next render).
 - **`wait`** — how long the main thread blocked on the *previous* transfer. This is
@@ -61,7 +63,8 @@ receives and flips in.
 | `--spi-hz` | 24 MHz | SPI clock (fallback path only). Higher = more throughput, more wiring SI risk. |
 | `--scale` | 2 | GPU supersample factor (1–16). 2 is the sweet spot for LED walls; 4 costs ~4× the GPU + readback for no visible gain on physical LEDs. Drop to 1 if a heavy shader still chugs. |
 | `--fps` | 120 | Frame-rate cap. The link self-paces off the rp2350b's READY line; this just stops rendering frames nobody asked for. |
-| `--gamma` | 1.0 | **Leave at 1.0.** The packer applies the real (CIE) gamma; setting this non-1 double-corrects. |
+| `--gamma` | 1.0 | Dry-run preview gamma only. Wall runs ignore it — they bake `PACK_GAMMA` into the GPU resolve pass (or, with `--readback legacy`, into the packer's LUT). |
+| `--readback` | `auto` | GPU→CPU frame path. `auto` = zero-copy dma-heap readback (falls back to `glReadPixels` off-Pi). `dmabuf-pipe` = ping-pong two buffers, reads frame N−1 while N renders — fastest, but +1 frame latency. `legacy` = the original full-size `glReadPixels` + numpy postprocess, for A/B or regression hunting. |
 | `--width` / `--height` | 256 / 64 | Render size (defaults to the full wall from `config.py`). Only touch for experiments. |
 | `--duration` | 0 (forever) | Stop after N seconds. |
 | `--loop SECONDS` | — | Cycle every standalone `.glsl` in the shader's folder. |
@@ -72,14 +75,16 @@ receives and flips in.
 | Constant | Now | Meaning |
 |---|---|---|
 | `ROWS`,`COLS`,`CHAIN`,`PARALLEL_CHAINS` | 32,64,4,2 | Panel geometry. `WALL_WIDTH`/`WALL_HEIGHT` derive from these (256×64). Change only if the panel count changes. |
-| `PACK_GAMMA` | 2.1 | The CIE gamma the **packer** applies. Lower = brighter mids / less contrast, higher = deeper blacks. **Must stay equal to the firmware `lut.rs` gamma** so the look matches firmware-rendered demos and the byte-match golden (`tools/verify.py`). |
+| `PACK_GAMMA` | 2.1 | The CIE gamma the wall gets — baked into the **GPU resolve pass** by default (packer LUT in `--readback legacy`). Lower = brighter mids / less contrast, higher = deeper blacks. **Must stay equal to the firmware `lut.rs` gamma** so the look matches firmware-rendered demos and the byte-match golden (`tools/verify.py`). |
 | `FLIP_H` / `FLIP_V` | False / False | Orientation. Flip these if you re-mount or re-cable; confirm with `rayglow.spi_test`. |
 | `BITDEPTH` | 8 | BCM planes. **Must equal firmware `B`.** |
 | `SINGLE_CHAIN` + `CHAIN_ORDER` / `ROW_ROTATE_180` | False | Single-chain serpentine fallback rig (Adafruit-HAT era). Leave False on the two-chain HAT. |
 
 > Gamma note: on the streaming path the firmware does NOT gamma-correct — it DMAs the
-> pre-packed bit-planes straight to the panels. Gamma is applied entirely by the rpi5
-> packer (`PACK_GAMMA`, a bit-exact replica of `lut.rs`). The firmware's own LUT only
+> pre-packed bit-planes straight to the panels. Gamma is applied entirely on the rpi5:
+> by the GPU resolve pass (default — quantizes to 8 bits once, from float, so dark
+> gradients come out smoother than the old 8-bit→LUT path), or by the packer's
+> bit-exact `lut.rs` replica in `--readback legacy`. The firmware's own LUT only
 > matters for firmware-rendered demos like `phase4-anim`.
 
 ---
@@ -128,9 +133,12 @@ compile-time (`W`/`H` are const generics), hence the reflash.
   `DATA_CLK_DIV` div (slower clock); check grounding (`hardware/POWER-AND-GROUNDING.md`).
 - **Heavy shader chugs** → drop `--scale` (2→1); check `render` in the stats line.
 - **Want more fps** → read the stats line first (see above), then attack the actual
-  limiter: `--scale` for render, `--pio-clkdiv` for the link.
-- **Colors look off** → confirm `--gamma` is 1.0 and `PACK_GAMMA` matches the
-  firmware LUT (`tools/verify.py` proves it).
+  limiter: `--scale` for render, `--pio-clkdiv` for the link. If `render` still
+  dominates, `--readback dmabuf-pipe` hides the GPU behind the pack stage for one
+  frame of added latency.
+- **Colors look off** → confirm `PACK_GAMMA` matches the firmware LUT
+  (`tools/verify.py` proves it); A/B against `--readback legacy` to rule the resolve
+  pass in or out (expect ≤1 LSB of difference).
 - **Image flipped / mirrored** → `FLIP_H` / `FLIP_V` in `config.py`.
 - **Link drops / desync** (`drops` climbing in the RTT log) → raise `--pio-clkdiv`
   (slower), check the J4 lane bundle's ground return, or fall back to `--transport spi`

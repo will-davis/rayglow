@@ -1,5 +1,44 @@
 # GPU Render Optimization Paths — RayGLow Pi 5 Renderer
 
+## Status — 2026-07-13: items 2, 3, 4, 5 (uniform skip), and 8 SHIPPED
+
+The DMA-BUF investigation (item 2) validated on the Pi 5 and landed together with
+the GPU resolve pass (items 3+4+8) and uniform-value caching (item 5's "skip
+unchanged" half). Measured by `tools/dmabuf_probe.py` at scale 2, 48-iteration
+plasma, 300 frames/mode:
+
+| Path | Frame total | vs old default |
+|---|---|---|
+| glReadPixels + CPU postprocess (now `--readback legacy`) | 6.60 ms | — |
+| dmabuf readback alone (sync) | 6.35 ms | 1.04× |
+| dmabuf + GPU resolve pass (sync) — **the new default** | **2.72 ms** | **2.43×** |
+| dmabuf + GPU resolve, ping-pong (`--readback dmabuf-pipe`) | 2.44 ms | 2.70× |
+
+Key findings, for the record:
+
+- **Why PBOs lost but dma-heaps win**: Mesa maps PBOs *uncached* on V3D, so reading
+  the frame out of the mapping was slower than glReadPixels' own copy. A
+  `/dev/dma_heap/system` buffer imported as a LINEAR ABGR8888 EGLImage gives a
+  **cached** CPU mmap with explicit invalidation (`DMA_BUF_IOCTL_SYNC`) — V3D's TLB
+  stores raster format natively, so the GPU renders straight into numpy-readable
+  memory. No root needed (video group).
+- **The fence wait is irreducible** — you can't read pixels that aren't rendered.
+  The dmabuf alone therefore only saved the copy (~4%). The win came from pairing it
+  with the resolve pass: with downsample+gamma+orientation on the GPU, the CPU has
+  nothing left to do per frame but pack, and the *synchronous* path (zero added
+  latency) captures nearly all of the pipelined path's gain.
+- GPU resolve output matches the CPU postprocess within 1 LSB (float average + single
+  quantization vs uint16 box-sum + 8-bit LUT); `tools/verify.py` still ALL GREEN —
+  the wire contract didn't move. Dark-end gradients are slightly *better* now
+  (gamma is applied to float values, quantized once).
+- Item 8's flips folded into the resolve pass sampling coords; item 5's UBO half is
+  NOT done (uniform value-caching alone cut the per-frame `glUniform*` ctypes calls
+  by roughly half).
+
+Remaining from this doc: item 1 (`--scale 1` once the resolve pass is judged on the
+wall), item 5's UBO variant, items 6/7 (skipped deliberately — hot reload stays, audio
+stays 120 Hz), item 9, and the GPU pack pass (below) as the next-wall prep.
+
 ## Summary
 
 Lowering `--scale` from 4 to 1 or 2 alone reduced frame latency dramatically. The supersampled FBO (scale=4 → 1024×256) forces V3D to shade 4× the pixels and read back ~1MB per frame, all for a display that resolves to 256×64 physical LEDs. (**Since actioned: the default is now `--scale 2`.**)
