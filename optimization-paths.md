@@ -121,7 +121,41 @@ Caching which uniforms changed would cut uniform uploads by ~60% on steady-state
 
 ---
 
-## Notes on What's Already Optimized Well
+## Scaling to the next wall (512×128 or 384×96, p4) — 2026-07-13 audit
+
+Where each stage lands at 4× / 2.25× today's pixel count:
+
+| Stage | 256×64 today | 384×96 | 512×128 | Verdict |
+|---|---|---|---|---|
+| GPU shade (scale 2) | 512×128 px | 768×192 | 1024×256 | 512×128@scale2 = today's scale-4 area — heavy shaders will hurt; scale 1 may become the default there |
+| Readback (RGBA, scale 2) | 256 KB | 576 KB | 1 MB | the sync fence grows linearly — this is what makes the GPU pack pass (below) matter |
+| numpy pack | 64 KB out | 144 KB | 256 KB | ~linear in pixels; ~4× today's `pack` ms at 512×128 |
+| Link (4-lane @ clkdiv 3, 33 MB/s) | 2.0 ms | 4.4 ms | 7.7 ms | fine (overlapped); clkdiv 2 = 50 MB/s halves it if the HAT's SI allows |
+| RP2350 refresh (25 MHz px clk, 2 chains) | ~680 Hz | ~340 Hz | ~190 Hz | fine; 37.5 MHz buys ~1.5× |
+| **RP2350 SRAM (520 KB total)** | 128 KB (2× 64 KB fb) | **288 KB — fits** | **512 KB — does NOT fit** | **the hard ceiling.** fb bytes = wall_px/2 × B, double-buffered |
+
+So: **384×96 runs on the current RP2350 rig unchanged** (bigger consts, generalized
+serpentine fold for 3 panel-rows on 2 chains). **512×128 does not fit** at 8-bit BCM
+double-buffered — the outs are B=6 (384 KB, visible banding risk in the low end),
+single-buffering (tear/race risk), or the FPGA translator (ULX3S/ECP5 with real RAM) —
+which was the plan anyway. PSRAM on the RP2350B is not a real out: the scan-out DMA
+needs jitter-free ~50 MB/s continuous reads that QSPI PSRAM can't guarantee.
+
+### The one big Pi-side lever left: pack on the GPU
+
+Combine items 3+4 above and go further — a final "pack pass" fragment shader (GLES 3.1
+integer ops) that box-averages the supersampled texture, applies the CIE LUT via a
+256-entry `usampler2D` texelFetch (bit-exact vs `lut.rs`), extracts the BCM planes, and
+writes the u16 cells straight into an RGBA8 target whose bytes ARE the wire stream
+(fold the PIO nibble-swap in for free). `glReadPixels` then returns the 64 KB payload
+directly:
+
+- readback shrinks 4× (scale 2) — 1 MB → 256 KB on the 512×128 wall
+- the entire numpy postprocess + pack stage disappears (`pack` → ~0)
+- verification story survives: extend `tools/verify.py` to diff the GPU pack against
+  `hub75.pack` on random frames
+
+This is the prep work that makes 512×128 viable on the Pi 5 side.
 
 - **Box-sum integer downsample** (`output.py:70-71`): Replacing float `.mean()` (~13ms at scale=4) with uint16 box-sum + LUT was a great call — ~10× faster.
 - **SendPipe overlap** (`__main__.py:228-285`): The depth-1 pipeline that overlaps SPI transfer with GPU rendering is well-designed. If `wait` hugs 0 in your stats, the link is fully hidden behind render.
