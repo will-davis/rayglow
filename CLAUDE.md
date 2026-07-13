@@ -37,6 +37,10 @@ pipeline diagram and the repo map. The pieces:
 - **`tools/`** — `verify.py`: proves `render/hub75.py` is byte-identical to the firmware.
 - **`docs/design-history/`** — superseded design docs kept for provenance (MilkDrop
   reverse-engineering, the RP2350 PROJECT-PLAN, the build-history brain-dump).
+- **`ROADMAP.md`** — queued workstreams, one session's worth each (audio-v3 packet
+  overhaul, runtime brightness side-band, now-playing/playlist control, per-shader
+  directives). When Will says "pick up the next item" start there; the audio-v3
+  section has a fill-in block that he owns — don't write it for him.
 
 ## What this is (and isn't)
 

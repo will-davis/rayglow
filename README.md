@@ -81,7 +81,8 @@ KiCad project, and fab Gerbers are in [`hardware/`](hardware/).
 | `rayglow/spi_test.py` | static SPI test pattern (no GL) — isolates the link/firmware from the renderer. |
 | `firmware/` | **RP2350b Rust firmware** — zero-CPU PIO+DMA HUB75 scan-out, brought up in verifiable phases. [firmware/README.md](firmware/README.md). |
 | `hardware/` | **custom HAT** — KiCad project, Gerbers, and the locked net/pinout spec. [hardware/README.md](hardware/README.md). |
-| `tools/` | `verify.py` — proves the Python packer (`render/hub75.py`) is byte-identical to the firmware via a Rust golden frame. |
+| `tools/` | `verify.py` — proves the Python packer (`render/hub75.py`) is byte-identical to the firmware via a Rust golden frame. `dmabuf_probe.py` — the readback benchmark. |
+| `ROADMAP.md` | queued workstreams — the living handoff doc between working sessions. |
 | `docs/design-history/` | the original project record (MilkDrop reverse-engineering, the RP2350 plan, the build-history brain-dump). Superseded by the docs above where they disagree. |
 
 ## Quickstart

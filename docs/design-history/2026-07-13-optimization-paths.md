@@ -1,5 +1,10 @@
 # GPU Render Optimization Paths — RayGLow Pi 5 Renderer
 
+> **ARCHIVED 2026-07-13** (was `optimization-paths.md` at the repo root). The
+> analysis is complete: items 2/3/4/8 and the skip-unchanged-uniforms half of 5
+> shipped (see Status below). Everything still actionable is carried forward in
+> the root **`ROADMAP.md`** — edit that, not this.
+
 ## Status — 2026-07-13: items 2, 3, 4, 5 (uniform skip), and 8 SHIPPED
 
 The DMA-BUF investigation (item 2) validated on the Pi 5 and landed together with

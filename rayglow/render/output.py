@@ -29,8 +29,9 @@ from .egl import (GL_FRAMEBUFFER, GL_MAP_READ_BIT, GL_PIXEL_PACK_BUFFER,
 # ---------------------------------------------------------------------------
 # GPU resolve pass
 # ---------------------------------------------------------------------------
-# Downsample + gamma + orientation in one fragment shader (optimization-paths
-# items 3+4+8).  Written as a Shadertoy mainImage so it reuses the Pass
+# Downsample + gamma + orientation in one fragment shader (items 3+4+8 of
+# docs/design-history/2026-07-13-optimization-paths.md).  Written as a
+# Shadertoy mainImage so it reuses the Pass
 # machinery; the constants are baked in with str.format because they are
 # fixed for the life of the process (hot reload never touches this pass).
 #

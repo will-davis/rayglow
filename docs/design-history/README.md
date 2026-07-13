@@ -19,3 +19,7 @@ current docs win.
   architecture decisions, the phased bring-up, GPIO pin map, and a bench-gear reality
   check. The durable design intent behind `firmware/` and `hardware/`; the code and their
   READMEs win where they've moved on.
+- **`2026-07-13-optimization-paths.md`** — the render-pipeline bottleneck analysis
+  (was root `optimization-paths.md`). Items 2/3/4/8 + uniform skip shipped as the GPU
+  resolve pass + dma-heap zero-copy readback; measured numbers in its Status section.
+  Still-open items carried into the root `ROADMAP.md`.

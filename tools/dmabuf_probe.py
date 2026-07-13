@@ -1,4 +1,8 @@
-"""DMA-BUF zero-copy readback feasibility probe (optimization-paths.md item 2).
+"""DMA-BUF zero-copy readback feasibility probe.
+
+(Item 2 of the render bottleneck analysis, now archived at
+docs/design-history/2026-07-13-optimization-paths.md — this probe's findings
+shipped as rayglow/render/dmabuf.py + the GPU resolve pass.)
 
 Answers, empirically on the Pi, whether replacing `glReadPixels` with a
 dma-heap render target + mmap is (a) correct and (b) faster:
@@ -236,7 +240,7 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
 }
 """
 
-# GPU resolve pass (optimization-paths.md item 3, prototyped here): box-average
+# GPU resolve pass (analysis item 3, prototyped here): box-average
 # the supersampled image texture down to panel resolution, apply gamma, and
 # flip so memory row 0 = wall top row — the readback then needs NO CPU
 # postprocess at all. Written as a mainImage shader so the probe (and the
