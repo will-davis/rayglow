@@ -14,13 +14,13 @@ Texture/audio channels — bind iChannel0..3 with --channelN flags or, better,
 'audio' is the Shadertoy 512x2 spectrum/waveform texture, fed live from the
 milk UDP feed (port 5005) with the usual synth fallback when no packets
 arrive; --no-listen skips the socket entirely (synth only).  Dry-run never
-listens.  'milk' is a 13x1 float texture of the packet's auto-gained band
-scalars (bass/mid/treb/vol/sub, 1.0 = typical, hits spike 2-3) plus derived
-signals per band (d/dt, ~125ms envelope, integrated phase), packet liveness,
-and the v2 feed's scalar features (spectral descriptors, beat/tempo, stereo,
-chroma) — see MilkChannel in textures.py for the texel map.  'spectrum' is a
-512x1 float texture of the v2 feed's real log-spaced spectrum.  Use milk when
-the audio texture's clamped spectrum feels binary, spectrum for a real shape.
+listens.  'milk' is a 16x3 float texture of the v3 feed: 8 log-spaced bands
+(1.0 = typical, hits spike 2-3) with three flywheel envelopes and three
+"music time" theta phases each, per-band onsets, beat/key/descriptor/stereo
+globals, packet liveness, and the legacy MilkDrop scalars — see MilkChannel
+in textures.py for the texel map.  'spectrum' is a 128x1 float texture: the
+feed's real spectrum (.x) + smooth band curves (.y/.z).  Use milk when the
+audio texture's clamped spectrum feels binary, spectrum for a real shape.
 
 Multipass (Shadertoy Buffer A-D): sibling files next to foo.glsl named
 foo.bufA.glsl .. foo.bufD.glsl are auto-discovered and rendered in Shadertoy

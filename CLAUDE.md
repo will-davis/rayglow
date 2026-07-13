@@ -35,12 +35,14 @@ pipeline diagram and the repo map. The pieces:
   `THIRD-PARTY.md`.
 - **`hardware/`** — the custom level-shifting HAT (KiCad project, Gerbers, net/pinout spec).
 - **`tools/`** — `verify.py`: proves `render/hub75.py` is byte-identical to the firmware.
+  `feed_check.py`: proves the feature-packet contract (sender ⇄ receiver ⇄ fake_sender);
+  its `--live` mode pretty-prints real packets for sine-tone band verification.
 - **`docs/design-history/`** — superseded design docs kept for provenance (MilkDrop
   reverse-engineering, the RP2350 PROJECT-PLAN, the build-history brain-dump).
-- **`ROADMAP.md`** — queued workstreams, one session's worth each (audio-v3 packet
-  overhaul, runtime brightness side-band, now-playing/playlist control, per-shader
-  directives). When Will says "pick up the next item" start there; the audio-v3
-  section has a fill-in block that he owns — don't write it for him.
+- **`ROADMAP.md`** — queued workstreams, one session's worth each (runtime brightness
+  side-band, now-playing/playlist control, per-shader directives). When Will says
+  "pick up the next item" start there. (The audio-v3 packet overhaul shipped 2026-07;
+  its brief + rationale are archived in `docs/design-history/`.)
 
 ## What this is (and isn't)
 
@@ -56,13 +58,16 @@ them.
 ## Invariants that look like bugs but aren't
 
 - **Two cross-machine contracts, both must stay in lockstep:**
-  - *The feature packet* — `sender/sender.py`'s `PACKET_FMT` (4236 B, v2) and
-    `rayglow/feed/receiver.py` must change together and bump `VERSION`. The receiver
-    dispatches on `(version, byte length)` and accepts v0 (556 B) + v1 (564 B, `sub =
-    bass` for v0) + v2 (the richer spectrum/chroma/beat/stereo feed; v2-only fields
-    default to zero for older senders). The full rules-that-look-wrong list (linear band
-    thirds, equalize-on, the deliberately inconsistent `analyze_sub`, deferred
-    `sounddevice` import) is in `sender/CLAUDE.md`.
+  - *The feature packet* — `sender/sender.py`'s `PACKET_FMT` (2996 B, v3) and
+    `rayglow/feed/receiver.py` (+ `rayglow/fake_sender.py`) must change together and
+    bump `VERSION`. The receiver dispatches on `(version, byte length)` and accepts
+    v0 (556 B) + v1 (564 B, `sub = bass` for v0) + v2 (4236 B) + v3 (the 8-band
+    flywheel/theta/beat/key feed; fields a version doesn't carry default to
+    zero/neutral for older senders). `tools/feed_check.py` roundtrip-checks the
+    contract — run it after any packet change. The full rules-that-look-wrong list
+    (linear band thirds, equalize-on legacy path, NO equalize on the v3 bands, the
+    deliberately inconsistent `analyze_sub`, deferred `sounddevice` import) is in
+    `sender/CLAUDE.md`.
   - *The link frame* — `rayglow/render/hub75.py` packs a 64 KB bit-plane stream that the
     firmware's RX DMA drops into its framebuffer with zero touch-up (the same bytes over
     the parallel bus or SPI; the layout is defined by `Display::render` in
@@ -109,6 +114,9 @@ values (and the mutagen session details) live in the gitignored `LOCAL-SETUP.md`
 - Renderer numerics, no hardware: `python -m rayglow.render <shader> --dry-run 120
   --no-listen` → frame stats + a GIF (works on the desktop's EGL too).
 - Sender: `cd sender && uv run sender.py --debug` → 1 Hz status line.
+- Feature packet ≡ across sender/receiver/fake_sender: `uv run --with numpy
+  tools/feed_check.py` (`--live` to watch real packets, e.g. under sine tones).
+- Beat tracker: `cd sender && uv run beat.py` → click-track lock table.
 - Packer ≡ firmware: `uv run --with numpy tools/verify.py` (needs `cargo`).
 - Firmware builds: `cd firmware && cargo build` (nightly + `thumbv8m.main-none-eabihf`).
 - On the panel: `sudo ~/venv/bin/python -m rayglow.render

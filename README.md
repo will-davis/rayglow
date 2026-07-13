@@ -14,8 +14,8 @@ desktop (optional)                 Raspberry Pi 5                         RP2350
 ┌────────────────────────┐         ┌────────────────────────────┐         ┌───────────────────────┐
 │ music ▶ sink monitor   │  UDP    │ feed.receiver (latest-win) │  4-lane │ phase6: PIO+DMA RX    │
 │ sender.py: FFT ▶ bands │ ──────▶ │ render: GLSL ▶ pack        │   bus   │ zero-CPU scan-out     │
-│ + AutoGain + sub band  │  :5005  │ (hub75.pack, LINEAR RGB)   │ ──────▶ │ ▶ HUB75 ▶ 256×64 wall │
-│ ▶ 4236-B v2 @ ~60 Hz   │ ~250KB/s│ headless EGL + GLES3       │  64 KB  │ (2 chains × 4 panels) │
+│ + flywheels/beat/key   │  :5005  │ (hub75.pack, LINEAR RGB)   │ ──────▶ │ ▶ HUB75 ▶ 256×64 wall │
+│ ▶ 2996-B v3 @ ~60 Hz   │ ~180KB/s│ headless EGL + GLES3       │  64 KB  │ (2 chains × 4 panels) │
 └────────────────────────┘         └────────────────────────────┘         └───────────────────────┘
         point $RAYGLOW_HOST ──────────────▶ your Pi
 ```

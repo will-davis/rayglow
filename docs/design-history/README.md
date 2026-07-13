@@ -23,3 +23,6 @@ current docs win.
   (was root `optimization-paths.md`). Items 2/3/4/8 + uniform skip shipped as the GPU
   resolve pass + dma-heap zero-copy readback; measured numbers in its Status section.
   Still-open items carried into the root `ROADMAP.md`.
+- **`2026-07-13-audio-feed-v3.md`** — the feed-v3 design record: Will's brief
+  (verbatim), the decisions (8 flywheel bands, predictive beat tracker, 128-bin
+  spectrum, key detection), and the superseded v2 packet + 13×1 texel map.
