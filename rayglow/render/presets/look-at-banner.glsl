@@ -39,7 +39,7 @@
 //  The atlas binds with LINEAR filtering (render/passes.make_texture default) —
 //  that bilinear interpolation IS what makes the field smooth. NEAREST = jaggies.
 
-const vec2 PANEL = vec2(256.0, 64.0);     // logical wall (config.SPI_WIDTH/HEIGHT)
+const vec2 PANEL = vec2(256.0, 64.0);     // logical wall (config.WALL_WIDTH/HEIGHT)
 const float ATLAS = 512.0;                // atlas is 512x512 (common.scaleW/H)
 
 // --- SDF edge controls (distance-field units, 0.5 == the glyph edge) ---------

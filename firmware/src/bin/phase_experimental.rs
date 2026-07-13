@@ -90,7 +90,7 @@ const XTAL_FREQ_HZ: u32 = 12_000_000;
 // A/B KNOB — panels daisy-chained on the single chain. W = 64 * this.
 //   8 = full wall   (512 wide, 64 KB frame)   (u8 cells: fb_cells(512,32,8))
 //   4 = one panel row (256 wide, 32 KB frame)  ← for fps/SI A/B testing
-// MUST match the Pi's `len(SPI_CHAIN_ORDER)` (config.py): both sides derive the
+// MUST match the Pi's `len(CHAIN_ORDER)` (config.py): both sides derive the
 // frame byte-count from it, and the handshake is a FIXED-size contract (the RX
 // DMA waits for exactly FRAME_BYTES) — a mismatch desyncs the link. Reflash to
 // change (W is a compile-time const generic). Chain A only (GP0–5); B idle/black.

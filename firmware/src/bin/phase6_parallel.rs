@@ -49,10 +49,10 @@
 //! framebuffer cell type + size differ. A cargo feature picks the geometry so ONE
 //! bin builds both:
 //!   * default          → single-chain: `hub75::single` (u8 cells), chain A only,
-//!                         W×H wall. Match the Pi: `SPI_SINGLE_CHAIN=True`.
+//!                         W×H wall. Match the Pi: `SINGLE_CHAIN=True`.
 //!   * `--features two-chain` → full wall: `hub75::Display` (u16 cells), both
-//!                         chains, W×2H. Match the Pi: `SPI_SINGLE_CHAIN=False`,
-//!                         `SPI_PARALLEL=2`, and pack via `pack()` (auto in run_spi).
+//!                         chains, W×2H. Match the Pi: `SINGLE_CHAIN=False`,
+//!                         `PARALLEL_CHAINS=2`, and pack via `pack()` (auto in run_wall).
 //! Physical: two-chain drives the second 4 panels off the HAT's J3 (chain B,
 //! GP6–11); single-chain leaves J3/GP6–11 black.
 //!
@@ -98,7 +98,7 @@ const XTAL_FREQ_HZ: u32 = 12_000_000;
 // A/B KNOB — panels daisy-chained on the single chain. W = 64 * this.
 //   8 = full wall   (512 wide, 64 KB frame)   (u8 cells: fb_cells(512,32,8))
 //   4 = one panel row (256 wide, 32 KB frame)  ← for fps/SI A/B testing
-// MUST match the Pi's `len(SPI_CHAIN_ORDER)` (config.py): both sides derive the
+// MUST match the Pi's `len(CHAIN_ORDER)` (config.py): both sides derive the
 // frame byte-count from it, and the handshake is a FIXED-size contract (the RX
 // DMA waits for exactly FRAME_BYTES) — a mismatch desyncs the link. Reflash to
 // change (W is a compile-time const generic). Chain A only (GP0–5); B idle/black.
@@ -115,7 +115,7 @@ const OE_GAIN: u32 = 64;
 // CHAIN MODE — selected by the `two-chain` cargo feature (see the bin's section in
 // Cargo.toml). Default (no feature) = single-chain: u8 cells, chain A only, W×H
 // wall. `--features two-chain` = the full two-chain wall: u16 cells, both chains,
-// W×2H, frame ×2. The Pi must match: config.SPI_SINGLE_CHAIN + SPI_PARALLEL.
+// W×2H, frame ×2. The Pi must match: config.SINGLE_CHAIN + PARALLEL_CHAINS.
 //   single: ChainMemory=DisplayMemory1<u8>, ChainDisplay=Display1, pack_single
 //   two   : ChainMemory=DisplayMemory<u16>, ChainDisplay=Display,  pack
 #[cfg(not(feature = "two-chain"))]
@@ -222,8 +222,8 @@ fn main() -> ! {
         ChainDisplay::new( // single or two-chain per the `two-chain` feature
             &mut DISPLAY_BUFFER,
             hub75::DisplayPins {
-                // Chain A (GP0–5) → the single physical chain via the Adafruit HAT.
-                // Chain B (GP6–11) is bound but UNCONNECTED — outputs black.
+                // Chain A (GP0–5) → custom-HAT J2. Chain B (GP6–11) → J3 with the
+                // two-chain feature; in single-chain builds it just outputs black.
                 rgb: [
                     pins.gpio0.into_function().into_pull_type().into_dyn_pin(),
                     pins.gpio1.into_function().into_pull_type().into_dyn_pin(),

@@ -77,7 +77,7 @@ struct pioshim *pioshim_open(unsigned data0_pin, unsigned clk_pin,
         return NULL;
     }
 
-    // Claim the 8 data lanes + clock as PIO-driven outputs.
+    // Claim the 4 data lanes + clock as PIO-driven outputs.
     for (unsigned i = 0; i < NUM_LANES; i++)
         pio_gpio_init(pio, data0_pin + i);
     pio_gpio_init(pio, clk_pin);
@@ -118,7 +118,7 @@ struct pioshim *pioshim_open(unsigned data0_pin, unsigned clk_pin,
     return h;
 }
 
-// Blocking DMA burst: clocks `nbytes` out the 8 lanes + data clock and returns
+// Blocking DMA burst: clocks `nbytes` out the 4 lanes + data clock and returns
 // when the transfer completes (0 ok, negative = piolib error). Per the piolib
 // README this blocks the whole RP1 firmware interface for the burst duration —
 // fine here: it's one short per-frame burst, like spidev's writebytes2.

@@ -10,8 +10,8 @@ Read the firmware's `rx[0..8]` line:
   bits within a nibble mirrored (e.g. 00 08 04 0c ...) -> reverse the lane wiring
                                                           (DATA0<->DATA3, DATA1<->DATA2).
 
-Launch from a LOCAL cwd (e.g. /tmp), not the ~/rayglow mount — lgpio's FIFO can't
-live on the network mount. Run by PATH (tools/ isn't part of the installed
+Launch from a LOCAL cwd (e.g. /tmp) — lgpio drops a FIFO in the cwd, so pick a
+plain local dir. Run by PATH (tools/ isn't part of the installed
 package; rayglow is, so the import resolves anywhere). Match --bytes to the
 firmware FRAME_BYTES (32 KB for a 4-panel single chain; fixed-size handshake).
 

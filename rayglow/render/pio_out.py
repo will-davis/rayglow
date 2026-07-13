@@ -1,7 +1,7 @@
-"""Parallel PIO transport — an SpiOut-compatible sink over the 4-lane RP1-PIO bus.
+"""Parallel PIO transport — the default sink, over the 4-lane RP1-PIO bus.
 
-Drop-in for `SpiOut`: same `__init__` / `send(bytes)` / `close()` shape, so the
-`run_spi` loop and `_SendPipe` use it unchanged. Data + clock are clocked out by
+Drop-in for `SpiOut` (the fallback): same `__init__` / `send(bytes)` / `close()`
+shape, so the `run_wall` loop and `_SendPipe` use it unchanged. Data + clock are clocked out by
 the Pi 5's RP1 PIO via `piobridge/libpioshim.so` (build it first — see
 `piobridge/README.md`); READY (and optionally CS) use gpiozero, like SpiOut. The
 byte stream is identical to the SPI path, so the firmware/packer don't change —
@@ -30,7 +30,7 @@ _NIBBLE_SWAP = bytes(((b << 4) | (b >> 4)) & 0xFF for b in range(256))
 class PioOut:
     _LIB = "libpioshim.so"
 
-    def __init__(self, clkdiv=4.0, ready_bcm=25, nibble_swap=True, use_cs=False,
+    def __init__(self, clkdiv=3.0, ready_bcm=25, nibble_swap=True, use_cs=False,
                  data0_gpio=12, clk_gpio=20, cs_gpio=21, lib_path=None):
         from gpiozero import DigitalInputDevice, DigitalOutputDevice
 

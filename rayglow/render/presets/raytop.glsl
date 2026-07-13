@@ -28,7 +28,7 @@
 // iChannel1: fonts/roboto-bold.png
 // iChannel2: milk
 
-const vec2 PANEL = vec2(256.0, 64.0);     // logical wall (config.SPI_WIDTH/HEIGHT)
+const vec2 PANEL = vec2(256.0, 64.0);     // logical wall (config.WALL_WIDTH/HEIGHT)
 const float ATLAS = 512.0;                // atlas is 512x512
 
 // --- SDF edge controls (distance-field units, 0.5 == the glyph edge) ---

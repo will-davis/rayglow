@@ -6,8 +6,9 @@ Paste a shader from shadertoy.com into a .glsl file unchanged (it must define
     sudo ~/venv/bin/python -m rayglow.render ../example.glsl
 
 The shader runs on the Pi's GPU via a headless (surfaceless) EGL + OpenGL ES 3
-context — no X server — then each frame is packed and shipped to the RP2350 over
-SPI, which drives the panels.  See __main__.py for the CLI.
+context — no X server — then each frame is packed and shipped to the RP2350
+(4-lane parallel PIO bus by default, SPI fallback), which drives the panels.
+See __main__.py for the CLI.
 
 Keep this module light: no GL or numpy imports at package-import time.
 """

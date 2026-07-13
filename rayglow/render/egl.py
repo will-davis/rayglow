@@ -2,8 +2,9 @@
 
 Only the ~30 functions this renderer needs.  The context is *surfaceless*
 (EGL_PLATFORM_SURFACELESS_MESA): no X, no GBM, no window — we render into an
-FBO and glReadPixels it back.  Verified working on this Pi 4B (V3D 4.2,
-Mesa 25.0.7, OpenGL ES 3.1).
+FBO and glReadPixels it back.  Originally brought up on a Pi 4B (V3D 4.2);
+now runs on the Pi 5 (V3D 7.1, Mesa, OpenGL ES 3.1) and any desktop Mesa EGL
+for dry-runs.
 
 Every function gets explicit argtypes/restype — ctypes inference on 64-bit
 pointers is how you segfault.  Enum values are standard Khronos constants

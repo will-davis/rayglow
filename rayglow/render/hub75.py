@@ -1,9 +1,10 @@
-"""Bit-plane packer: full-display RGB frame -> rp2350b SPI byte stream.
+"""Bit-plane packer: full-display RGB frame -> rp2350b link byte stream.
 
-This is the rpi5 half of the Phase-5 link. It turns a (64, 256, 3) uint8 LINEAR
-RGB frame into the exact 64 KB byte stream the RP2350 firmware expects in its
-inactive framebuffer, so the firmware's PIO+DMA receive path drops it straight in
-with zero CPU touch-up.
+This is the rpi5 half of the Pi->RP2350 link (both transports: the 4-lane
+parallel PIO bus and the SPI fallback carry this identical stream). It turns a
+(64, 256, 3) uint8 LINEAR RGB frame into the exact 64 KB byte stream the RP2350
+firmware expects in its inactive framebuffer, so the firmware's PIO+DMA receive
+path drops it straight in with zero CPU touch-up.
 
 It is a 1:1 port of the firmware's `Display::render` (firmware/src/lib.rs) and
 gamma LUT (firmware/src/lut.rs), and is proven **byte-identical** to the firmware
@@ -12,11 +13,11 @@ If you change the layout or gamma here, re-run that verifier and keep the
 firmware + this file in lockstep.
 
 Wire format (the "full display" = chain/row A over chain/row B):
-  - Wall   : SPI_WIDTH x SPI_HEIGHT (256 x 64), SPI_BITDEPTH planes, gamma SPI_GAMMA
-  - Input  : numpy uint8 (SPI_HEIGHT, SPI_WIDTH, 3), LINEAR RGB, C-contiguous.
+  - Wall   : WALL_WIDTH x WALL_HEIGHT (256 x 64), BITDEPTH planes, gamma PACK_GAMMA
+  - Input  : numpy uint8 (WALL_HEIGHT, WALL_WIDTH, 3), LINEAR RGB, C-contiguous.
              LINEAR because this packer owns gamma; the render readback must run
              at gamma 1.0 or color double-corrects.
-  - Output : SPI_WIDTH*SPI_HEIGHT/2*SPI_BITDEPTH * 2 bytes (65536), u16 LE.
+  - Output : WALL_WIDTH*WALL_HEIGHT/2*BITDEPTH * 2 bytes (65536), u16 LE.
 
 Cell index (matches firmware exactly):
     idx = addr_row*(W*B) + plane*W + (W-1-x)
@@ -36,14 +37,14 @@ import numpy as np
 from ..feed import config
 
 # Per-chain geometry. W/2H is the wall; H is one chain's height (ROWS).
-W = config.SPI_WIDTH            # 256 (two-chain wall width; single-chain infers per-frame)
+W = config.WALL_WIDTH           # 256 (two-chain wall width; single-chain infers per-frame)
 H = config.ROWS                 # 32 (per-chain height)
-B = config.SPI_BITDEPTH         # 8
-GAMMA = config.SPI_GAMMA        # 2.1
+B = config.BITDEPTH             # 8
+GAMMA = config.PACK_GAMMA       # 2.1
 # The firmware framebuffer is ALWAYS two chains tall (chain B is idle/black in
 # single-chain mode), so the packed frame is 2*H rows regardless of the logical
-# render height (config.SPI_HEIGHT). Decoupled from SPI_HEIGHT so a single-chain
-# rig can render a shorter wall (e.g. one 256x32 panel row, SPI_PARALLEL=1)
+# render height (config.WALL_HEIGHT). Decoupled from WALL_HEIGHT so a single-chain
+# rig can render a shorter wall (e.g. one 256x32 panel row, PARALLEL_CHAINS=1)
 # without tripping a two-chain invariant.
 WALL_H = 2 * H                  # 64 — packed-frame height (both chains)
 
@@ -52,9 +53,9 @@ FRAME_BYTES = FB_CELLS * 2      # 65536
 
 # Two-chain rigs feed the renderer's frame straight to pack(), so the render must
 # BE the full wall. Single-chain rigs go through to_single_chain(), which always
-# emits a 2*H-tall frame, so there SPI_HEIGHT is just the logical render height.
-if not config.SPI_SINGLE_CHAIN:
-    assert config.SPI_HEIGHT == WALL_H, "two-chain SPI_HEIGHT must equal 2*ROWS"
+# emits a 2*H-tall frame, so there WALL_HEIGHT is just the logical render height.
+if not config.SINGLE_CHAIN:
+    assert config.WALL_HEIGHT == WALL_H, "two-chain WALL_HEIGHT must equal 2*ROWS"
 
 
 def build_gamma_lut() -> np.ndarray:
@@ -172,15 +173,15 @@ def to_single_chain(frame: np.ndarray) -> np.ndarray:
     """Fold the logical wall into the single-chain electrical strip (firmware
     `phase-experimental`, W=512).
 
-    All CHAIN*SPI_PARALLEL panels run on ONE daisy-chain (the spare Adafruit HAT,
-    single output). Electrically that is a (ROWS, COLS*N) strip on one chain (N =
-    len(SPI_CHAIN_ORDER)). Panels are laid into the strip in `config.SPI_CHAIN_ORDER`
-    and rows listed in `config.SPI_ROW_ROTATE_180` are rotated 180deg for the
+    All CHAIN*PARALLEL_CHAINS panels run on ONE daisy-chain (the spare Adafruit
+    HAT, single output). Electrically that is a (ROWS, COLS*N) strip on one chain
+    (N = len(CHAIN_ORDER)). Panels are laid into the strip in `config.CHAIN_ORDER`
+    and rows listed in `config.ROW_ROTATE_180` are rotated 180deg for the
     serpentine U-turn (top row right->left, U-turn, bottom row left->right with
     that row's panels physically inverted).
 
     Input : (render_h, render_w, 3) uint8 — the logical wall, ≥ the panel-grid
-            extent SPI_CHAIN_ORDER references (post mount-orientation flips).
+            extent CHAIN_ORDER references (post mount-orientation flips).
     Output: (ROWS, COLS*N, 3) uint8 — ONE chain tall (the u8 engine has no chain
             B); feed straight to `pack_single`. Width = N panels × COLS.
 
@@ -188,21 +189,21 @@ def to_single_chain(frame: np.ndarray) -> np.ndarray:
     cabling; confirm with `python -m rayglow.spi_test` (the orientation pattern).
     """
     ph, pw = config.ROWS, config.COLS              # 32, 64 (panel height/width)
-    order = config.SPI_CHAIN_ORDER
-    rot = config.SPI_ROW_ROTATE_180
-    # SPI_CHAIN_ORDER must fit inside the rendered frame (and have a rotate flag
+    order = config.CHAIN_ORDER
+    rot = config.ROW_ROTATE_180
+    # CHAIN_ORDER must fit inside the rendered frame (and have a rotate flag
     # for every panel row it references) — catch a config mismatch with a clear
     # message instead of a numpy broadcast error.
     need_rows = max(pr for pr, _ in order) + 1
     need_cols = max(pc for _, pc in order) + 1
     if frame.shape[0] < need_rows * ph or frame.shape[1] < need_cols * pw:
         raise ValueError(
-            f"SPI_CHAIN_ORDER spans a {need_cols*pw}x{need_rows*ph} panel grid but "
-            f"the render is {frame.shape[1]}x{frame.shape[0]} — match SPI_HEIGHT/"
-            f"SPI_WIDTH (SPI_PARALLEL/CHAIN) to the panels you actually chained"
+            f"CHAIN_ORDER spans a {need_cols*pw}x{need_rows*ph} panel grid but "
+            f"the render is {frame.shape[1]}x{frame.shape[0]} — match WALL_HEIGHT/"
+            f"WALL_WIDTH (PARALLEL_CHAINS/CHAIN) to the panels you actually chained"
         )
     if len(rot) < need_rows:
-        raise ValueError(f"SPI_ROW_ROTATE_180 needs >= {need_rows} entries")
+        raise ValueError(f"ROW_ROTATE_180 needs >= {need_rows} entries")
     elec = np.zeros((ph, len(order) * pw, 3), dtype=frame.dtype)   # one chain tall
     for s, (prow, pcol) in enumerate(order):
         block = frame[prow * ph:(prow + 1) * ph, pcol * pw:(pcol + 1) * pw]

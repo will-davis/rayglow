@@ -49,8 +49,8 @@ path = "src/bin/phase_experimental.rs"
 name = "phase6-parallel"
 path = "src/bin/phase6_parallel.rs"
 # Default build is single-chain (u8, chain A). `--features two-chain` builds the
-# full 256x64 two-chain wall (u16, both chains, 64 KB frame). Pi must match:
-# config.SPI_SINGLE_CHAIN / SPI_PARALLEL.
+# full 256x64 two-chain wall (u16, both chains, 64 KB frame) — the PRODUCTION
+# flash. Pi must match: config.SINGLE_CHAIN / PARALLEL_CHAINS.
 
 [features]
 two-chain = []

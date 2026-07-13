@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
-"""Static SPI test pattern — isolates the link from the GL renderer.
+"""Static test pattern over the SPI fallback — isolates the link from the GL
+renderer.
 
 Sends a fixed, unambiguous frame through hub75.pack -> SpiOut, with NO OpenGL,
-no shader, no readback. If the wall shows this pattern cleanly and right-side-up,
-the packer + SPI + firmware are correct and any garbage in the live renderer is a
-GL/readback problem. If the wall shows it wrong, the fault is in the link/firmware.
+no shader, no readback (SPI transport only — flash phase5-spi; for the parallel
+bus use tools/pio_ramp.py for byte-order and the live renderer for pixels). If
+the wall shows this pattern cleanly and right-side-up, the packer + link +
+firmware are correct and any garbage in the live renderer is a GL/readback
+problem. If the wall shows it wrong, the fault is in the link/firmware.
 
 The pattern is authored in the FINAL display convention (row 0 = visual TOP,
 col 0 = visual LEFT) and packed RAW (no flip), so what you see on the wall is the
@@ -38,10 +41,10 @@ from .render.spi_out import SpiOut
 
 
 def build_pattern() -> np.ndarray:
-    """(SPI_HEIGHT, SPI_WIDTH, 3) uint8, top-left origin. Geometry-robust: seams
+    """(WALL_HEIGHT, WALL_WIDTH, 3) uint8, top-left origin. Geometry-robust: seams
     are drawn at panel boundaries so it works for any wall size (e.g. the
     single-chain 256x32 one-row A/B as well as the full 256x64)."""
-    H, W = config.SPI_HEIGHT, config.SPI_WIDTH
+    H, W = config.WALL_HEIGHT, config.WALL_WIDTH
     ph, pw = config.ROWS, config.COLS
     f = np.zeros((H, W, 3), np.uint8)
 
@@ -86,13 +89,13 @@ def main() -> int:
         frame = frame[:, ::-1]
     frame = np.ascontiguousarray(frame)
     # Single-chain rig: fold the logical wall into the one-chain strip and pack u8
-    # (this is the pattern that confirms SPI_CHAIN_ORDER / SPI_ROW_ROTATE_180).
-    if config.SPI_SINGLE_CHAIN:
+    # (this is the pattern that confirms CHAIN_ORDER / ROW_ROTATE_180).
+    if config.SINGLE_CHAIN:
         payload = hub75.pack_single(hub75.to_single_chain(frame))
     else:
         payload = hub75.pack(frame)
     print(f"spi_test: -> {len(payload)} bytes, "
-          f"flipv={args.flipv} fliph={args.fliph} single_chain={config.SPI_SINGLE_CHAIN}")
+          f"flipv={args.flipv} fliph={args.fliph} single_chain={config.SINGLE_CHAIN}")
 
     out = SpiOut(args.spi_hz, ready_bcm=args.ready_gpio)
     n = 0

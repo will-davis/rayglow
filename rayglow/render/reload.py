@@ -1,7 +1,7 @@
 """Hot reload: stat the .glsl every frame, recompile on mtime change.
 
-Requires the process to keep root (options.drop_privileges = 0) — after the
-default privilege drop, files under  become unreadable.
+Requires the process to keep root — hardware mode runs under sudo, and after a
+privilege drop the shader files under the user's home would become unreadable.
 """
 import os
 

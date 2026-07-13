@@ -226,14 +226,14 @@ def run_dry(toy, feed, args):
 
 
 class _SendPipe:
-    """Background SPI sender that overlaps frame N's transfer with frame N+1's
-    render. `out.send()` blocks for the SPI floor + READY wait (~8 ms); running
+    """Background link sender that overlaps frame N's transfer with frame N+1's
+    render. `out.send()` blocks for the transfer floor + READY wait; running
     it on a worker thread lets the main thread render+pack the next frame
     meanwhile, so the loop cadence becomes max(render+pack, send) instead of
     their sum. Depth-1 (one frame in flight) keeps the added latency to a single
-    frame. Only the worker touches `out`, so the SPI/GPIO objects stay
-    single-threaded. The GIL is released during the spidev write and READY wait,
-    so the overlap is real.
+    frame. Only the worker touches `out`, so the link/GPIO objects stay
+    single-threaded. The GIL is released during the transfer (pioshim DMA burst
+    or spidev write) and READY wait, so the overlap is real.
     """
 
     def __init__(self, out):
@@ -284,12 +284,13 @@ class _SendPipe:
         self._out.close()
 
 
-def run_spi(toy, watchers, feed, args, use_pbo=False, playlist=None, index=0):
-    """Render + pack + ship frames to the rp2350b over SPI (the only output).
+def run_wall(toy, watchers, feed, args, use_pbo=False, playlist=None, index=0):
+    """Render + pack + ship frames to the rp2350b over the link.
 
-    The render readback is LINEAR (args.gamma forced to 1.0) and gets packed
-    into bit-planes (hub75.pack, byte-identical to the firmware) before going
-    out over SPI; the rp2350b applies the CIE gamma LUT downstream. The READY
+    The render readback is LINEAR (args.gamma left at 1.0) and gets packed
+    into bit-planes (hub75.pack, byte-identical to the firmware — the packer
+    applies the CIE gamma LUT, mirroring firmware lut.rs) before going out over
+    the transport (4-lane parallel PIO bus by default, SPI fallback). The READY
     handshake self-paces: out.send() blocks until the rp2350b has armed its RX
     DMA, then pushes one 64 KB transfer.
 
@@ -300,17 +301,17 @@ def run_spi(toy, watchers, feed, args, use_pbo=False, playlist=None, index=0):
     """
     from .hub75 import pack, pack_single, to_single_chain
 
-    # Warm the full render+pack path before opening hardware (mirrors run_matrix).
+    # Warm the full render+pack path before opening hardware.
     if feed:
         feed.update(0.0, 1.0 / 60)
     warm = toy.render(0.0, 1.0 / 60, 0)
-    if config.SPI_SINGLE_CHAIN:
+    if config.SINGLE_CHAIN:
         pack_single(to_single_chain(warm))
     else:
         pack(warm)
 
-    # Transport: the 1-lane SPI link (default) or the 8-lane RP1-PIO parallel bus.
-    # Both expose send(bytes)/close(); the byte stream is identical either way.
+    # Transport: the 4-lane RP1-PIO parallel bus (default) or the 1-lane SPI
+    # fallback. Both expose send(bytes)/close(); the byte stream is identical.
     if args.transport == "pio":
         from .pio_out import PioOut
         out = PioOut(clkdiv=args.pio_clkdiv, ready_bcm=args.ready_gpio,
@@ -371,17 +372,17 @@ def run_spi(toy, watchers, feed, args, use_pbo=False, playlist=None, index=0):
             buf = toy.render(now - shader_t0, now - last, shader_frame)
             # Physical-install orientation (see config): the wall is rotated 180deg
             # from the rendered frame, so flip both axes before packing.
-            if config.SPI_FLIP_V:
+            if config.FLIP_V:
                 buf = buf[::-1]
-            if config.SPI_FLIP_H:
+            if config.FLIP_H:
                 buf = buf[:, ::-1]
             buf = np.ascontiguousarray(buf)
             # Single-chain rig: fold the logical wall into the 512-wide serpentine
             # strip (chain A) before packing. pack() infers the wider frame.
-            if config.SPI_SINGLE_CHAIN:
+            if config.SINGLE_CHAIN:
                 buf = to_single_chain(buf)
             tb = time.perf_counter()
-            payload = pack_single(buf) if config.SPI_SINGLE_CHAIN else pack(buf)
+            payload = pack_single(buf) if config.SINGLE_CHAIN else pack(buf)
             tc = time.perf_counter()
             # Hand the frame to the worker; it transfers while we render the next.
             # submit() blocks only if the previous transfer hasn't finished.
@@ -400,9 +401,9 @@ def run_spi(toy, watchers, feed, args, use_pbo=False, playlist=None, index=0):
                 # send = the worker's actual transfer time (link cost); wait =
                 # how much it leaked into the critical path. If wait hugs 0 the
                 # link is fully hidden and `render` is the clamp; if wait ~ send,
-                # the link still paces. SPI floor is the theoretical transfer min.
+                # the link still paces. The floor is the theoretical transfer min.
                 if args.transport == "pio":
-                    # 8 lanes, 1 byte/clock, 2 SM cycles/byte off RP1's 200 MHz.
+                    # 4 lanes, 1 nibble/SM-cycle, 2 SM cycles/byte off RP1's 200 MHz.
                     floor_ms = last_bytes / (200e6 / (2 * args.pio_clkdiv)) * 1e3
                     link = f"PIO floor {floor_ms:4.1f}ms @ clkdiv {args.pio_clkdiv:g}"
                 else:
@@ -415,6 +416,7 @@ def run_spi(toy, watchers, feed, args, use_pbo=False, playlist=None, index=0):
                     f"{acc_pack / n * 1e3:4.1f}ms "
                     f"{send_ms:4.1f}ms "
                     f"{acc_wait / n * 1e3:4.1f}ms "
+                    f"  ({link})"
                 )
                 fps_frames, fps_t = 0, now
                 acc_render = acc_pack = acc_wait = 0.0
@@ -438,14 +440,15 @@ def main():
                     "mainImage() code, pasted unchanged")
     ap.add_argument("--fps", type=float, default=120.0,
                     help="target fps cap (default 120)")
-    ap.add_argument("--scale", type=int, default=4,
-                    help="supersample factor (default 4; 1 = pixel-exact)")
+    ap.add_argument("--scale", type=int, default=2,
+                    help="supersample factor (default 2; 1 = pixel-exact, 4 = "
+                         "smoother but ~4x the GPU+readback cost)")
     ap.add_argument("--gamma", type=float, default=1.0,
-                    help="readback gamma (default 1.0 = LINEAR; the rp2350b "
-                         "firmware applies the CIE LUT, so correcting here too "
-                         "would double-correct)")
+                    help="readback gamma (default 1.0 = LINEAR; the packer "
+                         "applies the CIE LUT downstream, so correcting here "
+                         "too would double-correct)")
     ap.add_argument("--transport", choices=("spi", "pio"), default="pio",
-                    help="link to the rp2350b: 'pio' (8-lane RP1-PIO parallel "
+                    help="link to the rp2350b: 'pio' (4-lane RP1-PIO parallel "
                          "bus, default — needs phase6 firmware + "
                          "piobridge/libpioshim.so) or 'spi' (1-lane fallback)")
     ap.add_argument("--spi-hz", type=int, default=24_000_000,
@@ -478,9 +481,9 @@ def main():
     ap.add_argument("--out", default="/tmp/shadertoy_out.gif",
                     help="dry-run GIF path (default /tmp/shadertoy_out.gif)")
     ap.add_argument("--width", type=int, default=None,
-                    help="render width (default: %d)" % config.SPI_WIDTH)
+                    help="render width (default: %d)" % config.WALL_WIDTH)
     ap.add_argument("--height", type=int, default=None,
-                    help="render height (default: %d)" % config.SPI_HEIGHT)
+                    help="render height (default: %d)" % config.WALL_HEIGHT)
     for i in range(4):
         ap.add_argument(f"--channel{i}", metavar="SPEC", default=None,
                         help=("iChannel0 source: 'audio', 'milk', "
@@ -496,12 +499,12 @@ def main():
     args = ap.parse_args()
 
     # Geometry defaults to the full two-chain display (256x64). The render
-    # readback is LINEAR (gamma 1.0) because the rp2350b owns the CIE gamma LUT
-    # (config.SPI_GAMMA) — applying gamma here too would double-correct.
+    # readback is LINEAR (gamma 1.0) because the packer owns the CIE gamma LUT
+    # (config.PACK_GAMMA) — applying gamma here too would double-correct.
     if args.width is None:
-        args.width = config.SPI_WIDTH
+        args.width = config.WALL_WIDTH
     if args.height is None:
-        args.height = config.SPI_HEIGHT
+        args.height = config.WALL_HEIGHT
 
     try:
         ctx = GLContext()
@@ -539,8 +542,8 @@ def main():
     if dry:
         run_dry(toy, feed, args)
     else:
-        run_spi(toy, watchers, feed, args,
-                use_pbo=use_pbo, playlist=playlist, index=index)
+        run_wall(toy, watchers, feed, args,
+                 use_pbo=use_pbo, playlist=playlist, index=index)
 
 
 if __name__ == "__main__":

@@ -9,7 +9,8 @@ Subpackages:
                     panel/network config.  Shared, renderer-agnostic.
   rayglow.render  — the live renderer: headless EGL + GLES3 on the Pi's GPU,
                     running shaders pasted from shadertoy.com, then packing each
-                    frame (`hub75`) and shipping it to the RP2350 over SPI.
+                    frame (`hub75`) and shipping it to the RP2350 over the
+                    4-lane parallel PIO bus (SPI fallback).
 
 Keep this module import-light: no GL or numpy at package-import time.
 """
