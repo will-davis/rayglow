@@ -56,6 +56,12 @@ class Readback:
             self._blank = np.zeros((height, width, 3), np.uint8)
             egl.check_gl("PBO readback init")
 
+    def destroy(self):
+        """Free the PBO pair (sync path owns no GL objects)."""
+        if self.use_pbo:
+            ids = (ctypes.c_uint * 2)(self._pbo[0], self._pbo[1])
+            egl.glDeleteBuffers(2, ids)
+
     def _postprocess(self, rgba):
         """box-sum downsample -> gamma LUT -> v-flip -> drop alpha. Returns a
         fresh contiguous (H,W,3) uint8 (copies out of any mapped buffer)."""

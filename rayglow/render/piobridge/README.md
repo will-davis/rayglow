@@ -18,17 +18,24 @@ same CS-framing + READY handshake — so only the wire changes, not the protocol
   loads the shim and frames each burst with CS (gpiozero) + READY.
 - Firmware: `firmware/src/bin/phase6_parallel.rs` (`cargo run --bin phase6-parallel`).
 
-## Pin map (BCM ↔ RP2350 GP)
-| signal      | rpi5 BCM        | RP2350b GP   | notes |
-|-------------|-----------------|--------------|-------|
-| DATA0..3    | GPIO12..GPIO15  | GP20..GP23   | 4 contiguous lanes, `out pins,4` base = GPIO12 |
-| DCLK        | GPIO20          | GP24         | Pi-driven data clock (sideset) |
-| CS          | GPIO21          | GP25         | active-low frame boundary (gpiozero output) |
-| READY       | GPIO25 (in)     | GP26 (out)   | RP2350 → Pi: armed-and-waiting (same GP as SPI) |
-| GND         | —               | —            | a return beside the lane bundle; keep short |
+## Pin map — the custom HAT's J4 breakout (BCM ↔ J4 pin ↔ RP2350 GP)
+| signal      | rpi5 BCM     | J4 pin | RP2350b GP | notes |
+|-------------|--------------|:------:|------------|-------|
+| DATA0..3    | GPIO12..15   | 1–4    | GP19..GP22 | 4 contiguous lanes, `out pins,4` base = GPIO12 |
+| DCLK        | GPIO20       | 5      | GP26       | Pi-driven data clock (sideset) |
+| READY       | GPIO25 (in)  | 6      | GP27 (out) | RP2350 → Pi: armed-and-waiting |
+| 3V3 / GND   | —            | 7 / 8  | —          | reference + a return beside the lane bundle; keep short |
+| CS (reserve)| GPIO21       | —      | GP25       | OFF by default. See below. |
 
-GP19 + GP27 are spare on the RP2350. Confirm none of GPIO12–15/20/21 are reserved
-on your Pi (PWM/I2S/PCM can claim some) before wiring.
+**CS is dropped by default** — J4 only has 6 GPIO and 4-data+DCLK+CS+READY needs 7.
+The frame is delimited by READY + the fixed frame size; the firmware's `sm.restart()`
++ RX_STALL watchdog re-sync any corrupt frame. To re-enable CS (noisy setups): GP25
+is unrouted on the HAT but reaches the **protruding J1 header pin 22**, so jumper a Pi
+GPIO (default GPIO21) onto it, build the firmware with `USE_CS = true`, and pass
+`--pio-cs`. Both ends must agree.
+
+Confirm none of GPIO12–15/20/21/25 are reserved on your Pi (PWM/I2S/PCM can claim
+some) before wiring.
 
 ## Build & run (on the Pi)
 1. Build piolib as a library (once):

@@ -21,7 +21,7 @@ dependencies = [
 # frames to the rp2350b and reads its READY line.  These are Pi-only and
 # imported lazily, so the desktop dry-run path never needs them — install with
 # `uv pip install -e .[pi]` on the Pi.  (EGL/GLES come from system libs, not pip.)
-pi = ["spidev", "gpiozero", "lgpio"]
+pi = ["spidev", "gpiozero", "lgpio", "pyserial"]  # pyserial: ESP-NOW dongle UART bridge
 
 [tool.setuptools.packages.find]
 include = ["rayglow*"]

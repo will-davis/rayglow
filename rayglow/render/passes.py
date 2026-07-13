@@ -143,6 +143,18 @@ class Pass:
             self.fbo, self.out_tex = make_render_target(width, height)
         egl.check_gl(f"pass '{name}' render target")
 
+    def destroy(self):
+        """Free this pass's GL objects (program + render target(s)).  Channel
+        textures are owned by ShaderToy's cache, not deleted here."""
+        if self.program:
+            egl.glDeleteProgram(self.program)
+            self.program = 0
+        targets = self._targets if self.double_buffered else [(self.fbo,
+                                                               self.out_tex)]
+        for fbo, tex in targets:
+            egl.delete_framebuffer(fbo)
+            egl.delete_texture(tex)
+
     @property
     def front_tex(self):
         """Most recently completed frame (zero-initialized before frame 0)."""

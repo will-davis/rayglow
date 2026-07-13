@@ -140,6 +140,10 @@ glGenFramebuffers = _bind(_gl, "glGenFramebuffers", None,
                           [c_int, POINTER(c_uint)])
 glBindFramebuffer = _bind(_gl, "glBindFramebuffer", None, [c_uint, c_uint])
 glGenTextures = _bind(_gl, "glGenTextures", None, [c_int, POINTER(c_uint)])
+glDeleteTextures = _bind(_gl, "glDeleteTextures", None,
+                         [c_int, POINTER(c_uint)])
+glDeleteFramebuffers = _bind(_gl, "glDeleteFramebuffers", None,
+                             [c_int, POINTER(c_uint)])
 glBindTexture = _bind(_gl, "glBindTexture", None, [c_uint, c_uint])
 glActiveTexture = _bind(_gl, "glActiveTexture", None, [c_uint])
 glTexImage2D = _bind(_gl, "glTexImage2D", None,
@@ -182,6 +186,18 @@ glDeleteBuffers = _bind(_gl, "glDeleteBuffers", None, [c_int, POINTER(c_uint)])
 # ---------------------------------------------------------------------------
 class GLError(RuntimeError):
     pass
+
+
+def delete_texture(tex):
+    """Free one texture id (no-op for 0)."""
+    if tex:
+        glDeleteTextures(1, byref(c_uint(tex)))
+
+
+def delete_framebuffer(fbo):
+    """Free one framebuffer id (no-op for 0)."""
+    if fbo:
+        glDeleteFramebuffers(1, byref(c_uint(fbo)))
 
 
 def check_gl(where):

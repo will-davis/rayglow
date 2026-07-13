@@ -1,0 +1,3 @@
+.pio/
+# Real WiFi creds + Pi IP live here; commit only config.example.h.
+src/config.h

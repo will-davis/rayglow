@@ -3,9 +3,15 @@
 Drop-in for `SpiOut`: same `__init__` / `send(bytes)` / `close()` shape, so the
 `run_spi` loop and `_SendPipe` use it unchanged. Data + clock are clocked out by
 the Pi 5's RP1 PIO via `piobridge/libpioshim.so` (build it first — see
-`piobridge/README.md`); CS framing + READY use gpiozero, exactly like SpiOut. The
+`piobridge/README.md`); READY (and optionally CS) use gpiozero, like SpiOut. The
 byte stream is identical to the SPI path, so the firmware/packer don't change —
 only the wire. Pairs with firmware bin `phase6-parallel`.
+
+Pin map is the custom HAT's J4 breakout. CS is OFF by default to match the
+firmware (`USE_CS=false`): the frame is delimited by READY + the fixed frame size.
+Pass `use_cs=True` (and flip the firmware `USE_CS`, jumper GP25) for the CS-framed
+reserve. The Pi-side BCM defaults wire to J4 as: GPIO12-15→DATA0-3 (J4.1-4),
+GPIO20→DCLK (J4.5), GPIO25←READY (J4.6); CS GPIO21→GP25 jumper when enabled.
 
 The shim is opened lazily on the first `send()` so the frame size (and thus the
 DMA buffer) is taken from the actual payload, single- or two-chain alike.
@@ -24,7 +30,7 @@ _NIBBLE_SWAP = bytes(((b << 4) | (b >> 4)) & 0xFF for b in range(256))
 class PioOut:
     _LIB = "libpioshim.so"
 
-    def __init__(self, clkdiv=4.0, ready_bcm=25, nibble_swap=True,
+    def __init__(self, clkdiv=4.0, ready_bcm=25, nibble_swap=True, use_cs=False,
                  data0_gpio=12, clk_gpio=20, cs_gpio=21, lib_path=None):
         from gpiozero import DigitalInputDevice, DigitalOutputDevice
 
@@ -46,18 +52,20 @@ class PioOut:
 
         self.clkdiv = float(clkdiv)
         self.nibble_swap = bool(nibble_swap)
+        self.use_cs = bool(use_cs)
         self.data0_gpio = int(data0_gpio)
         self.clk_gpio = int(clk_gpio)
         self._handle = None
 
-        # READY: RP2350 -> Pi, active high (armed). CS: Pi -> RP2350, active low —
-        # active_high=False makes cs.on() drive the line LOW (asserted); start
-        # deasserted (idle high).
+        # READY: RP2350 -> Pi, active high (armed). CS (reserve, off by default):
+        # Pi -> RP2350, active low — active_high=False makes cs.on() drive the line
+        # LOW (asserted); start deasserted (idle high). Only created when use_cs.
         self.ready = DigitalInputDevice(ready_bcm, pull_up=False)
-        self.cs = DigitalOutputDevice(cs_gpio, active_high=False,
-                                      initial_value=False)
+        self.cs = (DigitalOutputDevice(cs_gpio, active_high=False,
+                                       initial_value=False) if self.use_cs else None)
         print(f"pio_out: 4-lane PIO bus — DATA0=GPIO{data0_gpio}, "
-              f"CLK=GPIO{clk_gpio}, CS=GPIO{cs_gpio}, READY=GPIO{ready_bcm}, "
+              f"CLK=GPIO{clk_gpio}, READY=GPIO{ready_bcm}, "
+              f"CS={'GPIO%d' % cs_gpio if self.use_cs else 'off'}, "
               f"clkdiv={self.clkdiv:g}")
 
     def _ensure_open(self, nbytes):
@@ -72,14 +80,16 @@ class PioOut:
         self._handle = h
 
     def send(self, payload):
-        """Wait for READY, frame the burst with CS, clock the bytes out."""
+        """Wait for READY, (optionally frame with CS), clock the bytes out."""
         self._ensure_open(len(payload))
         if self.nibble_swap:
             payload = payload.translate(_NIBBLE_SWAP)
         self.ready.wait_for_active()        # RP2350 armed its RX DMA
-        self.cs.on()                        # CS low — frame start
+        if self.cs is not None:
+            self.cs.on()                    # CS low — frame start
         rc = self._lib.pioshim_send(self._handle, payload, len(payload))
-        self.cs.off()                       # CS high — frame end
+        if self.cs is not None:
+            self.cs.off()                   # CS high — frame end
         if rc != 0:
             raise RuntimeError(f"pioshim_send failed ({rc})")
 
@@ -89,5 +99,6 @@ class PioOut:
                 self._lib.pioshim_close(self._handle)
                 self._handle = None
         finally:
-            self.cs.close()
+            if self.cs is not None:
+                self.cs.close()
             self.ready.close()

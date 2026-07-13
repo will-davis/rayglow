@@ -52,7 +52,7 @@ const vec3 DOWN  = vec3(1.0,  0.3,  0.3);   // ddt while falling
 // The renderer supersamples (--scale), so gl_FragCoord counts RENDER
 // pixels, not LEDs.  Dividing by iResolution and multiplying by the panel
 // size gives honest 1-LED-wide columns at any --scale.
-const vec2 PANEL = vec2(256.0, 32.0);
+const vec2 PANEL = vec2(256.0, 64.0);
 
 // True when panel pixel `px` is inside a 1-px bar at column `col` whose
 // height is `value` (0..1 of the panel; y counts up from the bottom).

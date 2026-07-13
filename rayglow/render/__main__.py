@@ -14,11 +14,13 @@ Texture/audio channels — bind iChannel0..3 with --channelN flags or, better,
 'audio' is the Shadertoy 512x2 spectrum/waveform texture, fed live from the
 milk UDP feed (port 5005) with the usual synth fallback when no packets
 arrive; --no-listen skips the socket entirely (synth only).  Dry-run never
-listens.  'milk' is an 8x1 float texture of the packet's auto-gained band
+listens.  'milk' is a 13x1 float texture of the packet's auto-gained band
 scalars (bass/mid/treb/vol/sub, 1.0 = typical, hits spike 2-3) plus derived
-signals per band (d/dt, ~125ms envelope, integrated phase) and packet
-liveness — see MilkChannel in textures.py for the texel map.  Use it when
-the audio texture's clamped spectrum feels binary.
+signals per band (d/dt, ~125ms envelope, integrated phase), packet liveness,
+and the v2 feed's scalar features (spectral descriptors, beat/tempo, stereo,
+chroma) — see MilkChannel in textures.py for the texel map.  'spectrum' is a
+512x1 float texture of the v2 feed's real log-spaced spectrum.  Use milk when
+the audio texture's clamped spectrum feels binary, spectrum for a real shape.
 
 Multipass (Shadertoy Buffer A-D): sibling files next to foo.glsl named
 foo.bufA.glsl .. foo.bufD.glsl are auto-discovered and rendered in Shadertoy
@@ -31,6 +33,13 @@ and in foo.glsl:
 While running on hardware, edit any of the .glsl files in another window and
 save — the panel recompiles live (compile errors print here; last good
 shader keeps showing, and buffer state survives the reload).
+
+--loop SECONDS cycles every standalone .glsl in the launched shader's folder,
+switching on that interval and wrapping at the end (buffer siblings
+foo.bufA.glsl..bufD.glsl are skipped; a shader that fails to compile is
+skipped too). Each switch rebuilds the shader fresh, so iTime/iFrame restart
+at 0 and multipass buffers start cleared:
+    sudo ~/venv/bin/python -m rayglow.render presets/first.glsl --loop 30
 """
 import argparse
 import os
@@ -114,6 +123,76 @@ def maybe_reload(toy, watchers):
         else:
             print(f"reload failed ({name}) — keeping last good shader:\n{msg}",
                   file=sys.stderr)
+
+
+def build_shader(args, use_pbo, shader_path, fatal=True):
+    """Build a fresh ShaderToy + GlslWatchers for one shader file and its
+    sibling buffer passes (foo.bufA.glsl .. foo.bufD.glsl).
+
+    All passes are created before any compile so buffer cross-references
+    resolve regardless of order; buffers compile first, image last.  CLI
+    --channelN overrides apply to the image pass.
+
+    fatal=True (initial launch): a compile error exits the process.
+    fatal=False (--loop switch): a compile error prints, tears the half-built
+    toy back down, and returns (None, None) so the caller skips that shader.
+    """
+    toy = ShaderToy(args.width, args.height, scale=args.scale,
+                    gamma=args.gamma, use_pbo=use_pbo,
+                    base_dir=os.path.dirname(os.path.abspath(shader_path)))
+    for i in range(4):
+        spec = getattr(args, f"channel{i}")
+        if spec:
+            toy.set_cli_channel(i, spec)
+
+    watchers = {}
+    base = re.sub(r"\.glsl$", "", shader_path)
+    for x in "ABCD":
+        path = f"{base}.buf{x}.glsl"
+        if os.path.exists(path):
+            toy.add_buffer(f"buf{x}")
+            watchers[f"buf{x}"] = GlslWatcher(path)
+    watchers["image"] = GlslWatcher(shader_path)
+    if len(watchers) > 1:
+        print(f"multipass: {', '.join(watchers)} "
+              f"(buffers: {toy.buffer_format[3]})")
+    for name, watcher in watchers.items():
+        if fatal:
+            compile_or_die(toy, name, watcher.read())
+        else:
+            ok, msg = toy.set_source(name, watcher.read())
+            if not ok:
+                print(f"--loop: skipping {shader_path} — compile error "
+                      f"({name}):\n{msg}", file=sys.stderr)
+                toy.destroy()
+                return None, None
+            if msg:
+                print(f"warning ({name}): {msg}", file=sys.stderr)
+    return toy, watchers
+
+
+def build_playlist(shader_path):
+    """Sorted absolute paths of the standalone .glsl files in shader_path's
+    directory.  Buffer siblings (foo.bufA.glsl .. foo.bufD.glsl) are excluded
+    — they're multipass inputs, not shaders to display on their own."""
+    d = os.path.dirname(os.path.abspath(shader_path))
+    buf_re = re.compile(r"\.buf[A-D]\.glsl$")
+    names = sorted(f for f in os.listdir(d)
+                   if f.endswith(".glsl") and not buf_re.search(f))
+    return [os.path.join(d, n) for n in names]
+
+
+def _next_compilable(playlist, index, args, use_pbo):
+    """Walk forward from `index` (wrapping) and build the next shader that
+    compiles.  Returns (new_index, toy, watchers), or None if a full lap finds
+    nothing that compiles (caller keeps showing the current shader)."""
+    n = len(playlist)
+    for step in range(1, n):
+        j = (index + step) % n
+        toy, watchers = build_shader(args, use_pbo, playlist[j], fatal=False)
+        if toy is not None:
+            return j, toy, watchers
+    return None
 
 
 def run_dry(toy, feed, args):
@@ -205,7 +284,7 @@ class _SendPipe:
         self._out.close()
 
 
-def run_spi(toy, watchers, feed, args):
+def run_spi(toy, watchers, feed, args, use_pbo=False, playlist=None, index=0):
     """Render + pack + ship frames to the rp2350b over SPI (the only output).
 
     The render readback is LINEAR (args.gamma forced to 1.0) and gets packed
@@ -213,6 +292,11 @@ def run_spi(toy, watchers, feed, args):
     out over SPI; the rp2350b applies the CIE gamma LUT downstream. The READY
     handshake self-paces: out.send() blocks until the rp2350b has armed its RX
     DMA, then pushes one 64 KB transfer.
+
+    With a `playlist` (--loop), every args.loop seconds the current shader is
+    torn down and the next compilable shader in the folder is built fresh —
+    `index` tracks the position.  The feed (audio state + UDP socket) and the
+    hardware link persist across switches; only the toy is swapped.
     """
     from .hub75 import pack, pack_single, to_single_chain
 
@@ -230,7 +314,7 @@ def run_spi(toy, watchers, feed, args):
     if args.transport == "pio":
         from .pio_out import PioOut
         out = PioOut(clkdiv=args.pio_clkdiv, ready_bcm=args.ready_gpio,
-                     nibble_swap=not args.pio_no_nibble_swap)
+                     nibble_swap=not args.pio_no_nibble_swap, use_cs=args.pio_cs)
     else:
         from .spi_out import SpiOut
         out = SpiOut(args.spi_hz, ready_bcm=args.ready_gpio)
@@ -243,7 +327,11 @@ def run_spi(toy, watchers, feed, args):
     t0 = time.perf_counter()
     last = t0
     fps_frames, fps_t = 0, t0
-    frame = 0
+    # The shader clock (iTime/iFrame) is per-shader so each --loop switch
+    # restarts at 0; t0 stays global for --duration and the (continuous) feed.
+    shader_t0 = t0
+    shader_frame = 0
+    switch_t = t0
     # Per-stage accumulators. render+pack run on this thread; the SPI transfer
     # runs on the worker (pipe.acc_send). `acc_wait` is how long this thread
     # blocks waiting for the previous transfer — the residual send-bound stall
@@ -251,16 +339,36 @@ def run_spi(toy, watchers, feed, args):
     acc_render = acc_pack = acc_wait = 0.0
     pipe.acc_send = 0.0
     last_bytes = 0
+    print(
+        f"\n"
+        f"  fps "
+        f" render "
+        f"  pack "
+        f"  send "
+        f"  wait"
+    )
     try:
         while True:
             now = time.perf_counter()
             if args.duration and now - t0 >= args.duration:
                 break
+            # --loop: time to advance to the next shader in the folder.
+            if playlist and now - switch_t >= args.loop:
+                switch_t = now
+                nxt = _next_compilable(playlist, index, args, use_pbo)
+                if nxt is not None:
+                    index, new_toy, watchers = nxt
+                    toy.destroy()              # free the outgoing toy's GL objects
+                    toy = new_toy
+                    feed.channels = toy.audio_channels  # repoint the live feed
+                    shader_t0, shader_frame = now, 0    # restart this shader's clock
+                    print(f"--loop: now showing {os.path.basename(playlist[index])}")
             maybe_reload(toy, watchers)
             if feed:
                 feed.update(now - t0, now - last)
             ta = time.perf_counter()
-            buf = toy.render(now - t0, now - last, frame)  # (H,W,3) uint8 LINEAR
+            # (H,W,3) uint8 LINEAR; shader clock is per-shader (resets on switch)
+            buf = toy.render(now - shader_t0, now - last, shader_frame)
             # Physical-install orientation (see config): the wall is rotated 180deg
             # from the rendered frame, so flip both axes before packing.
             if config.SPI_FLIP_V:
@@ -283,9 +391,10 @@ def run_spi(toy, watchers, feed, args):
             acc_wait += wait              # stall on the previous send (overlap residue)
             last_bytes = len(payload)
             last = now
-            frame += 1
+            shader_frame += 1
 
             fps_frames += 1
+
             if now - fps_t >= 5.0:
                 n = fps_frames
                 # send = the worker's actual transfer time (link cost); wait =
@@ -300,11 +409,13 @@ def run_spi(toy, watchers, feed, args):
                     floor_ms = last_bytes * 8 / args.spi_hz * 1e3
                     link = f"SPI floor {floor_ms:4.1f}ms @ {args.spi_hz/1e6:.0f}MHz"
                 send_ms = pipe.acc_send / n * 1e3
-                print(f"{n / (now - fps_t):6.1f} fps | "
-                      f"render {acc_render / n * 1e3:5.1f}ms  "
-                      f"pack {acc_pack / n * 1e3:4.1f}ms  "
-                      f"send {send_ms:5.1f}ms  wait {acc_wait / n * 1e3:5.1f}ms "
-                      f"({link}, {last_bytes//1024}KB)")
+                print(
+                    f"{n / (now - fps_t):5.1f} "
+                    f"{acc_render / n * 1e3:5.1f}ms "
+                    f"{acc_pack / n * 1e3:4.1f}ms "
+                    f"{send_ms:4.1f}ms "
+                    f"{acc_wait / n * 1e3:4.1f}ms "
+                )
                 fps_frames, fps_t = 0, now
                 acc_render = acc_pack = acc_wait = 0.0
                 pipe.acc_send = 0.0
@@ -325,31 +436,42 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("shader", help="path to a .glsl file with Shadertoy "
                     "mainImage() code, pasted unchanged")
-    ap.add_argument("--fps", type=float, default=60.0,
-                    help="target fps cap (default 60)")
+    ap.add_argument("--fps", type=float, default=120.0,
+                    help="target fps cap (default 120)")
     ap.add_argument("--scale", type=int, default=4,
                     help="supersample factor (default 4; 1 = pixel-exact)")
     ap.add_argument("--gamma", type=float, default=1.0,
                     help="readback gamma (default 1.0 = LINEAR; the rp2350b "
                          "firmware applies the CIE LUT, so correcting here too "
                          "would double-correct)")
-    ap.add_argument("--transport", choices=("spi", "pio"), default="spi",
-                    help="link to the rp2350b: 'spi' (1-lane, proven default) or "
-                         "'pio' (8-lane RP1-PIO parallel bus — needs phase6 "
-                         "firmware + piobridge/libpioshim.so)")
+    ap.add_argument("--transport", choices=("spi", "pio"), default="pio",
+                    help="link to the rp2350b: 'pio' (8-lane RP1-PIO parallel "
+                         "bus, default — needs phase6 firmware + "
+                         "piobridge/libpioshim.so) or 'spi' (1-lane fallback)")
     ap.add_argument("--spi-hz", type=int, default=24_000_000,
                     help="SPI clock in Hz (--transport spi; start low, then ramp)")
-    ap.add_argument("--pio-clkdiv", type=float, default=4.0,
+    ap.add_argument("--pio-clkdiv", type=float, default=3.0,
                     help="RP1-PIO clock divisor (--transport pio); per-lane rate "
-                         "≈ 200MHz/(2*div). Start high (slow), then lower")
+                         "≈ 200MHz/(2*div). Start high (slow), then lower "
+                         "(default 3)")
     ap.add_argument("--pio-no-nibble-swap", action="store_true",
                     help="(--transport pio) disable the per-byte nibble swap — "
                          "use only if the logic analyzer shows nibbles arriving "
                          "un-swapped")
+    ap.add_argument("--pio-cs", action="store_true",
+                    help="(--transport pio) drive the optional CS frame line "
+                         "(GPIO21→GP25 jumper); requires firmware built with "
+                         "USE_CS=true. Default off (READY-framed)")
     ap.add_argument("--ready-gpio", type=int, default=25,
                     help="BCM pin reading the rp2350b READY line")
     ap.add_argument("--duration", type=float, default=0.0,
                     help="stop after N seconds (default: run forever)")
+    ap.add_argument("--loop", type=float, default=None, metavar="SECONDS",
+                    help="cycle through every .glsl in the launched shader's "
+                         "folder, switching every SECONDS and wrapping at the "
+                         "end (buffer siblings .bufA-D.glsl are skipped). Each "
+                         "shader restarts fresh (iTime/iFrame=0, buffers "
+                         "cleared). Hardware only")
     ap.add_argument("--dry-run", nargs="?", const=120, type=int, default=None,
                     metavar="N", help="headless: render N frames (default "
                     "120), save a GIF, no hardware")
@@ -392,39 +514,33 @@ def main():
     # output.Readback); only ever for the live loop, never dry-run (the one-frame
     # shift/drop would skew the GIF).
     use_pbo = (args.dry_run is None) and args.pbo
-    toy = ShaderToy(args.width, args.height, scale=args.scale,
-                    gamma=args.gamma, use_pbo=use_pbo,
-                    base_dir=os.path.dirname(os.path.abspath(args.shader)))
-    for i in range(4):
-        spec = getattr(args, f"channel{i}")
-        if spec:
-            toy.set_cli_channel(i, spec)
-
-    # Multipass: foo.glsl + sibling foo.bufA.glsl .. foo.bufD.glsl.
-    # All passes are created before any compile so buffer cross-references
-    # resolve regardless of order; buffers compile first, image last.
-    watchers = {}
-    base = re.sub(r"\.glsl$", "", args.shader)
-    for x in "ABCD":
-        path = f"{base}.buf{x}.glsl"
-        if os.path.exists(path):
-            toy.add_buffer(f"buf{x}")
-            watchers[f"buf{x}"] = GlslWatcher(path)
-    watchers["image"] = GlslWatcher(args.shader)
-    if len(watchers) > 1:
-        print(f"multipass: {', '.join(watchers)} "
-              f"(buffers: {toy.buffer_format[3]})")
-    for name, watcher in watchers.items():
-        compile_or_die(toy, name, watcher.read())
-
     dry = args.dry_run is not None
+    toy, watchers = build_shader(args, use_pbo, args.shader, fatal=True)
+
     feed = AudioFeed(toy.audio_channels,
                      allow_listen=not args.no_listen and not dry)
+
+    # --loop: build the folder playlist and find where the launched shader sits.
+    # Ignored in dry-run (the GIF is a single shader). One-shader folders just
+    # run normally.
+    playlist, index = None, 0
+    if args.loop is not None and not dry:
+        playlist = build_playlist(args.shader)
+        start = os.path.abspath(args.shader)
+        index = playlist.index(start) if start in playlist else 0
+        if len(playlist) <= 1:
+            print(f"--loop: only one shader in {os.path.dirname(start)} — "
+                  "nothing to cycle")
+            playlist = None
+        else:
+            print(f"--loop: cycling {len(playlist)} shaders every "
+                  f"{args.loop:g}s")
 
     if dry:
         run_dry(toy, feed, args)
     else:
-        run_spi(toy, watchers, feed, args)
+        run_spi(toy, watchers, feed, args,
+                use_pbo=use_pbo, playlist=playlist, index=index)
 
 
 if __name__ == "__main__":

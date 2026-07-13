@@ -17,6 +17,7 @@ this HAT.
 | File | What |
 |---|---|
 | [`NET-SPEC.md`](NET-SPEC.md) | **The locked electrical spec** — component list, '245 mappings, HUB75 pinout, power/grounding rules. The input to schematic generation. Lock before editing the schematic. |
+| [`POWER-AND-GROUNDING.md`](POWER-AND-GROUNDING.md) | **Bench-measured** power/ground findings (PicoScope): star-ground rules, ratiometric buffer-VCC, ground-bounce diagnosis, wire-gauge math, the 3-channel-PSU reality, HV-distribution v2. Refines NET-SPEC's buffer-rail note. |
 | [`PIZERO-HEADER-PINOUT.md`](PIZERO-HEADER-PINOUT.md) | Physical header pin → **actual** RP2350 GPIO map, read off the board schematic. Critical: the Waveshare board is **not** standard Pi BCM (it transposes a few GPIO pairs). |
 | [`NETLIST-REVIEW.md`](NETLIST-REVIEW.md) | QA notes on the generated netlist. |
 | [`KICAD-AGENT-TOOLING.md`](KICAD-AGENT-TOOLING.md) | How the schematic was generated with SKiDL + which parts are human-in-the-loop (routing). |

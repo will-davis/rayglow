@@ -33,7 +33,7 @@ class ShaderToy:
     panel-ready (H, W, 3) uint8 numpy array.
     """
 
-    def __init__(self, width, height, scale=4, gamma=1.2, base_dir=None,
+    def __init__(self, width, height, scale=2, gamma=1.2, base_dir=None,
                  use_pbo=False):
         self.width, self.height, self.scale = width, height, scale
         self.base_dir = base_dir          # directive image paths resolve here
@@ -48,6 +48,23 @@ class ShaderToy:
         self._bound = {}                  # (pass_name, index) -> spec
         self._cache = {}                  # spec -> Channel (shared textures)
         self._smoothed_fps = 60.0
+
+    def destroy(self):
+        """Free every GL object this toy owns: passes (programs + render
+        targets), cached channel textures, the dummy texture, and the
+        readback's PBOs.  Call before dropping a toy (e.g. --loop switch) so
+        rebuilds don't leak FBOs/textures into the Pi's shared RAM.  Buffer
+        channels own no texture; texture-backed channels each own one."""
+        for p in self.passes.values():
+            p.destroy()
+        from .egl import delete_texture
+        for ch in self._cache.values():
+            delete_texture(getattr(ch, "texture", 0))
+        delete_texture(self.dummy_tex)
+        self.readback.destroy()
+        self.passes = {}
+        self._cache = {}
+        self.audio_channels = []
 
     @property
     def image(self):

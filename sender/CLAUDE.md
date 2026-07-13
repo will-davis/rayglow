@@ -7,8 +7,9 @@ for the protocol and feature detail.
 ## What this is
 
 The desktop feature daemon (`sender.py`, single file): captures the PipeWire monitor of
-the default sink, runs MilkDrop3's exact sound analysis, and unicasts 564-byte v1
-feature packets over UDP at ~60 Hz to the Pi (192.168.0.50:5005). It's a standalone uv
+the default sink, runs MilkDrop3's exact sound analysis (plus a v2 spectrum/chroma/beat/
+stereo layer), and unicasts ~4.2 KB v2 feature packets over UDP at ~60 Hz to the Pi
+(192.168.0.50:5005). It's a standalone uv
 project — it shares *no code* with the `rayglow` package, only the packet contract
 mirrored in `rayglow/feed/receiver.py`. The renderer that consumes these packets is
 `rayglow.render` (GLSL on the Pi). `docs/design-history/project-milk-pi.md` is the
@@ -39,10 +40,13 @@ aren't:
   bands; the actual code uses three equal *linear* thirds of the bottom half-spectrum
   (bins [0:85], [85:170], [170:256]). Equalize is ON (a `-1` arg lands on a bool).
   Source line references are cited inline throughout — keep them accurate when editing.
-- **The packet is a cross-machine contract.** `PACKET_FMT` (564 bytes, v1) must match
-  `rayglow/feed/receiver.py`, which asserts the sizes at import and accepts both v0
-  (556 bytes) and v1 (= v0 + `(sub, sub_att)`, falling back `sub = bass` for v0). Any
-  layout change must be made in lockstep with the receiver and bump `VERSION`. Downstream
+- **The packet is a cross-machine contract.** `PACKET_FMT` (4236 bytes, v2) must match
+  `rayglow/feed/receiver.py`, which asserts the sizes at import and dispatches on
+  `(version, exact byte length)` — accepting v0 (556 B), v1 (564 B = v0 + `(sub,
+  sub_att)`, `sub = bass` for v0), and v2 (the richer spectrum/chroma/beat/stereo feed;
+  note its field order differs — `sub` precedes a 512-sample `wave`). Older senders get
+  zeros/defaults for the v2-only fields. Any layout change must be made in lockstep with
+  the receiver and bump `VERSION`. Downstream
   of the receiver, shaders consume the bands via the `milk`/`audio` iChannel textures
   (`rayglow/render/textures.py`); the texel map there is calibrated to AutoGain's
   "1.0 = typical" semantics. (Note: "milk" survives as the *iChannel spec name* and the

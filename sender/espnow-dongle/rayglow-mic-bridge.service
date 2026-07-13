@@ -1,0 +1,24 @@
+# RayGLow ESP-NOW mic -> UDP bridge (runs on the Pi).
+# Install:
+#   sudo cp rayglow-mic-bridge.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now rayglow-mic-bridge
+# Then: journalctl -u rayglow-mic-bridge -f
+#
+# EDIT before enabling: the --port must match the spare UART you enabled (see
+# README), and the venv/repo paths + User must match your Pi.
+[Unit]
+Description=RayGLow ESP-NOW mic -> UDP bridge (dongle UART to renderer)
+After=multi-user.target
+
+[Service]
+Type=simple
+# --port: the spare UART RX device (confirm with: ls -l /dev/serial* /dev/ttyAMA*)
+ExecStart=/home/will/venv/bin/python /home/will/Projects/rayglow/sender/espnow-dongle/pi_bridge.py --port /dev/ttyAMA3 --baud 921600
+Restart=always
+RestartSec=2
+User=will
+# Serial device group (RPi OS: 'dialout'). Adjust if your distro differs.
+SupplementaryGroups=dialout
+
+[Install]
+WantedBy=multi-user.target

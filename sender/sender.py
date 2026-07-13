@@ -2,11 +2,12 @@
 """RayGLow desktop feature daemon — the broadcast half of the LED-panel visualizer.
 
 Captures the PipeWire monitor of the default sink (whatever the desktop is
-playing), extracts per-frame audio features, and sends 564-byte v1 packets
-over unicast UDP at ~60 Hz to the Pi, which renders on a 256x32 HUB75 matrix.
+playing), extracts per-frame audio features, and sends ~4.2 KB v2 feature
+packets over unicast UDP at ~60 Hz to the Pi, which renders on a 256x32 HUB75
+matrix.
 
-Receiving end (the `rayglow` package on the Pi 4B at 192.168.0.50; same git
-repo as this file — deployed via clone, not file-sync):
+Receiving end (the `rayglow` package on the Raspberry Pi 5 at 192.168.0.50; 
+same git repo as this file:
   - rayglow.feed.receiver — the other half of the packet contract (accepts
     v0+v1, nonblocking latest-wins drain)
   - rayglow.feed.features — FeatureState: latest packet values + synth fallback
@@ -20,9 +21,8 @@ repo as this file — deployed via clone, not file-sync):
   - rayglow/fake_sender.py — the music-free test harness speaking the same
     struct, for exercising the renderer without audio.
 
-The analysis chain is a faithful port of MilkDrop3's (code/ in the MilkDrop3
-repo).  MilkDrop is no longer the renderer, but its auto-gain semantics —
-each band normalized by its own running average, 1.0 = "typical for this
+The analysis chain is based on Milkdrop, expanded for higher resolution.
+Each band normalized by its own running average, 1.0 = "typical for this
 song right now", hits spike 2-3 — are what every shader downstream is
 calibrated against, so the port stays exact:
   - FFT front-end (vis_milk2/fft.cpp): 576-sample window, left channel,
@@ -35,13 +35,33 @@ calibrated against, so the port stays exact:
     actual code never uses them.  We replicate the code, not the comment.)
   - AutoGain (plugin.cpp:8750): identical to fake_sender.py.
 
-v1 extension (NOT MilkDrop): a true sub-bass band.  MilkDrop's "bass" is
-linear bins 0..85 = 0-4kHz with a log-equalize that suppresses the lowest
-bins ~90x — subwoofer content is effectively invisible in it.  `sub` fixes
+v1 extension: a true sub-bass band.  MilkDrop's "bass" is linear bins 
+0..85 = 0-4kHz with a log-equalize that suppresses the lowest bins ~90x
+ — subwoofer content is effectively invisible in it.  `sub` fixes
 that: 2048-sample FFT (23.4 Hz/bin), raw magnitudes (no equalize), bins
 1..5 = 23-117 Hz, own AutoGain.  Appended to the packet as (sub, sub_att).
 In shaders it's milk-texture texel 4 (or band index 4 anywhere bands are
 ordered bass/mid/treb/vol/sub).
+
+v2 extension (richer feed; the band path above is UNCHANGED so the
+existing shader library stays calibrated).  A separate, larger 4096-sample
+FFT (SpectrumAnalyzer below; 11.7 Hz/bin — real low-end resolution, ~85ms
+window) feeds five new feature groups appended to the packet:
+  - spectrum  512 magnitude bins (30 Hz..16 kHz) on a hybrid lin/log axis,
+              dB-normalized 0..1.  A true spectral SHAPE — the wire used to
+              carry none.  (Hybrid axis: real FFT data in every bin, no
+              interpolated low-end holes — see _SPEC_EDGES below.)
+  - chroma    12 pitch-class energies (C..B), for color-by-key visuals.
+  - descriptors  centroid (brightness), spectral flux (onset), flatness
+              (tonal vs noisy), rolloff, crest.
+  - beat      bpm + beat_phase(0..1) + confidence, from an autocorrelation
+              tempo tracker on the flux onset envelope (BeatTracker below).
+              The per-frame BEAT/DOWNBEAT pulses ride the `flags` field.
+  - stereo    width (L/R correlation) + pan, from the right channel that the
+              capture ring already holds but the band path ignores.
+The `flags` u16 (always 0 through v1) now carries a 4-bit source_domain
+(0=audio) plus BEAT/DOWNBEAT bits, so non-audio senders (SDR, telemetry)
+are self-labeled instead of riding a convention.
 
 Packet layout: PACKET_FMT below, mirrored in rayglow/feed/receiver.py; full
 field table in this directory's README.md.  (docs/design-history/ holds the
@@ -65,15 +85,31 @@ import time
 
 import numpy as np
 
-# ---- packet v1 — contract mirrored in rayglow/feed/receiver.py + fake_sender.py
-# v1 = the v0 layout (docs/design-history/project-milk-pi.md §5) with
-# (sub, sub_att) appended; the receiver accepts both and substitutes sub=bass
-# for v0 senders.
-PACKET_FMT = "<IHHIf7f128f2f"   # magic, ver, flags, seq, t, 6 bands + vol, wave[128], sub, sub_att
+# ---- packet v2 — contract mirrored in rayglow/feed/receiver.py + fake_sender.py
+# Layout (little-endian, no padding):
+#   header   magic u32, version u16, flags u16, seq u32, t f32
+#   bands    bass mid treb bass_att mid_att treb_att vol            (7f)
+#   sub      sub sub_att                                            (2f)
+#   wave     mono waveform, 512 samples, ±1.0                       (512f)
+#   spec     hybrid lin/log spectrum, 30Hz..16kHz, dB-norm 0..1     (512f)
+#   chroma   12 pitch-class energies, C..B, peak-normalized         (12f)
+#   desc     centroid flux flatness rolloff crest                   (5f)
+#   beat     bpm beat_phase beat_conf                               (3f)
+#   stereo   width pan                                              (2f)
+# The header + 7 band floats + (sub,sub_att) keep their v1 SEMANTICS; the
+# receiver dispatches on (version, exact byte length) so v0/v1 senders still
+# parse against their own layouts (see receiver.VERSIONS).
+WAVE_SAMPLES = 512
+SPEC_OUT = 512                  # streamed log-spectrum bins
+CHROMA_N = 12                   # pitch classes
+PACKET_FMT = ("<IHHIf7f2f" + f"{WAVE_SAMPLES}f" + f"{SPEC_OUT}f"
+              + f"{CHROMA_N}f" + "5f3f2f")
 MAGIC = 0x4D494C4B              # "MILK"
-VERSION = 1
-WAVE_SAMPLES = 128
-assert struct.calcsize(PACKET_FMT) == 564
+VERSION = 2
+SOURCE_AUDIO = 0                # flags bits 0-3: source_domain
+FLAG_BEAT = 0x10               # flags bit 4: onset this frame
+FLAG_DOWNBEAT = 0x20           # flags bit 5: every 4th beat
+assert struct.calcsize(PACKET_FMT) == 4236
 
 # ---- defaults ----------------------------------------------------------------
 # The Pi's IP. Override per-rig with $RAYGLOW_HOST or --host; the literal here is
@@ -100,6 +136,210 @@ SUB_WINDOW = 2048               # 42.7ms at 48k -> 23.4 Hz/bin: can see the sub
 SUB_ENVELOPE = (0.5 - 0.5 * np.cos(2.0 * np.pi * np.arange(SUB_WINDOW)
                                    / SUB_WINDOW)).astype(np.float32)
 SUB_BINS = slice(1, 6)          # bins 1..5 = 23-117 Hz (skip 0: DC offset)
+
+# ---- v2 spectrum / chroma / descriptor FFT (separate from the band FFT) ---------
+# A longer window than analyze()'s 576: trades latency for frequency resolution
+# (11.7 Hz/bin), which the displayed spectrum and chroma want and the snappy
+# bands don't.  The MilkDrop band path stays on its own 576/1024 FFT untouched.
+SPEC_WINDOW = 4096              # 85ms at 48k -> 11.7 Hz/bin
+SPEC_ENVELOPE = (0.5 - 0.5 * np.cos(2.0 * np.pi * np.arange(SPEC_WINDOW)
+                                    / SPEC_WINDOW)).astype(np.float32)
+NYQUIST = SAMPLE_RATE / 2.0
+_FFT_BINS = np.arange(SPEC_WINDOW // 2 + 1)
+_FFT_HZ = (_FFT_BINS * SAMPLE_RATE / SPEC_WINDOW).astype(np.float32)
+
+# Streamed spectrum: SPEC_OUT bands over [SPEC_FMIN, SPEC_FMAX] on a *hybrid
+# linear-then-log* axis, chosen so every band carries real FFT data (max entropy
+# on the wire) — no band is ever finer than the FFT can resolve.
+#
+# Why not pure log: the FFT resolves a uniform Δf = SAMPLE_RATE/SPEC_WINDOW
+# (~11.7 Hz) at every frequency, but a log band below ~1.9 kHz is *narrower*
+# than that, so ~160 low bands would capture zero FFT bins -> a comb of holes we
+# could only fill by interpolation (faking data the FFT doesn't have).  Instead
+# we spend the first SPEC_NLIN bands linearly at one FFT bin each (the densest
+# *real* resolution the transform offers down low), then log-space the rest up to
+# SPEC_FMAX.  The low end lands in a small block of slots; if a shader wants the
+# classic full-log look it can remap/interpolate on the Pi, where it's free.
+SPEC_FMIN, SPEC_FMAX = 30.0, 16000.0
+_SPEC_DF = SAMPLE_RATE / SPEC_WINDOW            # FFT bin width, ~11.7 Hz
+# Pick the linear/log split whose log segment lands on SPEC_FMAX with its first
+# (narrowest) band still >= one FFT bin — a seamless join, zero empty bands.
+def _spec_split():
+    best = None
+    for n_lin in range(1, SPEC_OUT):
+        fc = SPEC_FMIN + n_lin * _SPEC_DF
+        n_log = SPEC_OUT - n_lin
+        if fc >= SPEC_FMAX or n_log < 1:
+            continue
+        r = (SPEC_FMAX / fc) ** (1.0 / n_log)  # ratio that hits FMAX exactly
+        err = abs(fc * (r - 1.0) - _SPEC_DF)   # first log band vs one FFT bin
+        if best is None or err < best[0]:
+            best = (err, n_lin, fc, r)
+    return best[1], best[2], best[3]
+
+SPEC_NLIN, _SPEC_FC, _SPEC_R = _spec_split()   # ~162 linear bands, Fc ~1.9 kHz
+_SPEC_EDGES = np.concatenate([
+    SPEC_FMIN + _SPEC_DF * np.arange(SPEC_NLIN + 1),                 # linear
+    _SPEC_FC * _SPEC_R ** np.arange(1, SPEC_OUT - SPEC_NLIN + 1),    # log
+])
+_SPEC_CENTERS = np.sqrt(_SPEC_EDGES[:-1] * _SPEC_EDGES[1:]).astype(np.float32)
+_band_of_bin = np.searchsorted(_SPEC_EDGES, _FFT_HZ, side="right") - 1
+_SPEC_MASK = (_band_of_bin >= 0) & (_band_of_bin < SPEC_OUT)
+_SPEC_BAND = _band_of_bin[_SPEC_MASK]
+_SPEC_COUNT = np.bincount(_SPEC_BAND, minlength=SPEC_OUT).astype(np.float32)
+# Belt-and-suspenders: the hybrid axis yields zero empty bands by construction,
+# but if the FFT params ever drift, any starved band reads its center magnitude
+# by interpolation (below) rather than averaging-of-nothing -> 0.
+_SPEC_EMPTY = _SPEC_COUNT == 0
+_SPEC_COUNT[_SPEC_EMPTY] = 1.0                 # avoid /0 on any empty band
+# dB-normalization: full-scale-sine peak ~ window.sum()/2; map a generous music
+# range to 0..1.  Deliberately wider than the legacy audio-texture spectrum row
+# (which clamps everything >-30dB to 1.0); shaders can further remap (see
+# radio-waterfall.glsl's FLOOR/CEIL/GAMMA).
+SPEC_REF = float(SPEC_ENVELOPE.sum()) / 2.0
+SPEC_DB_FLOOR, SPEC_DB_CEIL = -90.0, -10.0
+
+# Chroma: fold FFT bins in the musical range into 12 pitch classes (0=C).
+# midi = 69 + 12*log2(f/440); pitch class = midi mod 12.  Low-octave chroma is
+# inherently coarse even at 11.7 Hz/bin (sub-100Hz semitones aren't separable)
+# — acceptable; a constant-Q transform is the upgrade path.
+CHROMA_FMIN, CHROMA_FMAX = 55.0, 5000.0
+_CHROMA_MASK = (_FFT_HZ >= CHROMA_FMIN) & (_FFT_HZ <= CHROMA_FMAX)
+_CHROMA_PC = (np.round(69.0 + 12.0 * np.log2(_FFT_HZ[_CHROMA_MASK] / 440.0))
+              .astype(int)) % 12
+
+
+class SpectrumAnalyzer:
+    """Larger dedicated FFT -> streamed spectrum, chroma, and spectral
+    descriptors.  Holds one frame of previous magnitudes for spectral flux."""
+
+    def __init__(self):
+        self._prev_mag = None
+
+    def update(self, window_left):
+        """window_left: SPEC_WINDOW left-channel samples (oldest-first)."""
+        mag = np.abs(np.fft.rfft(window_left * SPEC_ENVELOPE)).astype(np.float32)
+
+        # Log-spaced spectrum (bandwidth-fair mean per band), dB-normalized.
+        # Under-resolved low bands (no FFT bin landed in them) get the magnitude
+        # interpolated at their center frequency, so the bottom ~40% isn't a comb
+        # of zeros — see _SPEC_EMPTY above.
+        sums = np.bincount(_SPEC_BAND, weights=mag[_SPEC_MASK], minlength=SPEC_OUT)
+        band = sums.astype(np.float32) / _SPEC_COUNT
+        band[_SPEC_EMPTY] = np.interp(_SPEC_CENTERS[_SPEC_EMPTY], _FFT_HZ, mag)
+        db = 20.0 * np.log10(band / SPEC_REF + 1e-12)
+        spec = np.clip((db - SPEC_DB_FLOOR) / (SPEC_DB_CEIL - SPEC_DB_FLOOR),
+                       0.0, 1.0).astype(np.float32)
+
+        # Chroma: pitch-class energy, peak-normalized to 0..1.
+        chroma = np.bincount(_CHROMA_PC, weights=mag[_CHROMA_MASK],
+                             minlength=12).astype(np.float32)
+        chroma /= chroma.max() + 1e-9
+
+        # Descriptors (all from the linear magnitude spectrum).
+        msum = float(mag.sum()) + 1e-12
+        centroid = float((_FFT_HZ * mag).sum()) / msum / NYQUIST   # brightness
+        csum = np.cumsum(mag)
+        roll_i = int(np.searchsorted(csum, 0.85 * csum[-1]))       # 85% rolloff
+        rolloff = float(_FFT_HZ[min(roll_i, len(_FFT_HZ) - 1)]) / NYQUIST
+        gmean = float(np.exp(np.log(mag + 1e-12).mean()))
+        flatness = gmean / (float(mag.mean()) + 1e-12)             # tonal<->noisy
+        crest = float(mag.max()) / (float(mag.mean()) + 1e-12)     # peakiness
+
+        if self._prev_mag is None:
+            self._prev_mag = mag
+        flux = float(np.maximum(0.0, mag - self._prev_mag).sum())  # onset energy
+        self._prev_mag = mag
+
+        return spec, chroma, centroid, flatness, rolloff, crest, flux
+
+
+class BeatTracker:
+    """Tempo + beat phase from the spectral-flux onset envelope.
+
+    Autocorrelates a few seconds of onset history to find the dominant period
+    (BPM), advances a phase accumulator at that tempo, and nudges the phase
+    toward onsets so beat_phase==0 lands on the beat.  This is the one
+    heuristic component of the feed — good enough to lock onto steady music;
+    a proper probabilistic tempo model is the upgrade path.
+    """
+
+    MIN_BPM, MAX_BPM = 70.0, 180.0
+    HIST_SECS = 6.0
+    RECOMPUTE_SECS = 0.5
+
+    def __init__(self, fps):
+        self.fps = fps
+        self.N = max(8, int(self.HIST_SECS * fps))
+        self.hist = np.zeros(self.N, np.float32)
+        self.pos = 0
+        self.filled = False
+        self.bpm = 120.0
+        self.phase = 0.0
+        self.conf = 0.0
+        self.beat_count = 0
+        self._since_recompute = 0.0
+        self._last_onset_t = -1.0
+
+    def update(self, onset, dt, t):
+        """onset: auto-gained spectral flux (~1.0 typical).  Returns
+        (bpm, beat_phase 0..1, confidence, beat_flag, downbeat_flag)."""
+        self.hist[self.pos] = onset
+        self.pos = (self.pos + 1) % self.N
+        if self.pos == 0:
+            self.filled = True
+
+        self.phase += self.bpm / 60.0 * dt        # advance at current tempo
+
+        self._since_recompute += dt
+        if self._since_recompute >= self.RECOMPUTE_SECS and self.filled:
+            self._since_recompute = 0.0
+            self._recompute()
+
+        beat = downbeat = False
+        if self.phase >= 1.0:
+            self.phase -= 1.0
+            beat = True
+            self.beat_count += 1
+            downbeat = (self.beat_count % 4) == 0
+
+        # Re-sync: a strong onset should sit on a beat.  Pull a drifted phase
+        # back toward 0 (gently, and rate-limited so we don't chase 16ths).
+        if onset > 1.8 and (t - self._last_onset_t) > 0.25:
+            self._last_onset_t = t
+            self.phase *= 0.5
+
+        return self.bpm, self.phase % 1.0, self.conf, beat, downbeat
+
+    def _recompute(self):
+        ordered = np.concatenate((self.hist[self.pos:], self.hist[:self.pos]))
+        x = ordered - ordered.mean()
+        ac = np.correlate(x, x, mode="full")[len(x) - 1:]   # ac[lag], lag>=0
+        if ac[0] <= 1e-6:
+            return
+        lo = int(60.0 * self.fps / self.MAX_BPM)
+        hi = min(int(60.0 * self.fps / self.MIN_BPM), len(ac) - 1)
+        if hi <= lo:
+            return
+        k = lo + int(np.argmax(ac[lo:hi + 1]))
+        self.bpm = 60.0 * self.fps / k
+        self.conf = float(ac[k] / ac[0])
+
+
+def analyze_stereo(frames):
+    """(N, 2) stereo block -> (width, pan).
+
+    width = L/R correlation (-1 anti-phase, 0 uncorrelated, +1 mono).
+    pan   = RMS balance (-1 hard left, 0 center, +1 hard right).
+    Time-domain, no FFT — uses the right channel the band path ignores.
+    """
+    left = frames[:, 0]
+    right = frames[:, 1]
+    el = float(np.sqrt(np.mean(left * left))) + 1e-9
+    er = float(np.sqrt(np.mean(right * right))) + 1e-9
+    width = float(np.mean(left * right)) / (el * er)
+    pan = (er - el) / (er + el)
+    return width, pan
 
 
 def adjust_rate_to_fps(rate, fps1, actual_fps):
@@ -228,8 +468,10 @@ def main():
     cap = Capture(source, sd)
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    gains = [AutoGain() for _ in range(5)]      # bass, mid, treb, vol, sub
+    gains = [AutoGain() for _ in range(6)]      # bass, mid, treb, vol, sub, flux
     wave_x = np.linspace(0.0, WINDOW - 1, WAVE_SAMPLES)
+    spectrum = SpectrumAnalyzer()
+    beats = BeatTracker(args.fps)
 
     print(f"sender: {source} -> {args.host}:{args.port} @ {args.fps:.0f} Hz (ctrl-c to stop)")
 
@@ -237,6 +479,7 @@ def main():
     t0 = time.monotonic()
     next_tick = t0
     last_print = t0
+    prev_now = t0
     while True:
         now = time.monotonic()
         if now < next_tick:
@@ -244,10 +487,12 @@ def main():
             now = time.monotonic()
         next_tick += 1.0 / args.fps
         t = now - t0
+        dt = now - prev_now
+        prev_now = now
 
         frames = cap.latest(WINDOW)                       # (576, 2)
         raw = analyze(frames[:, 0])                       # left channel, like MilkDrop
-        rels = [g.update(imm, args.fps) for g, imm in zip(gains, raw)]
+        rels = [gains[i].update(imm, args.fps) for i, imm in enumerate(raw)]
         (bass, bass_att), (mid, mid_att), (treb, treb_att), (vol, _) = rels
 
         raw_sub = analyze_sub(cap.latest(SUB_WINDOW)[:, 0])
@@ -257,9 +502,24 @@ def main():
         wave = np.clip(np.interp(wave_x, np.arange(WINDOW), mono),
                        -1.0, 1.0).astype(np.float32)
 
-        pkt = struct.pack(PACKET_FMT, MAGIC, VERSION, 0, seq & 0xFFFFFFFF, t,
+        # ---- v2 features --------------------------------------------------
+        spec, chroma, centroid, flatness, rolloff, crest, raw_flux = \
+            spectrum.update(cap.latest(SPEC_WINDOW)[:, 0])
+        flux, _ = gains[5].update(raw_flux, args.fps)     # onset, 1.0 = typical
+        bpm, beat_phase, beat_conf, beat, downbeat = beats.update(flux, dt, t)
+        width, pan = analyze_stereo(frames)
+
+        flags = SOURCE_AUDIO
+        if beat:
+            flags |= FLAG_BEAT
+        if downbeat:
+            flags |= FLAG_DOWNBEAT
+
+        pkt = struct.pack(PACKET_FMT, MAGIC, VERSION, flags, seq & 0xFFFFFFFF, t,
                           bass, mid, treb, bass_att, mid_att, treb_att, vol,
-                          *wave, sub, sub_att)
+                          sub, sub_att, *wave, *spec, *chroma,
+                          centroid, flux, flatness, rolloff, crest,
+                          bpm, beat_phase, beat_conf, width, pan)
         sock.sendto(pkt, (args.host, args.port))
         seq += 1
 
@@ -267,10 +527,11 @@ def main():
             line = (f"t={t:7.1f}s seq={seq:6d}  sub={sub:5.2f}/{sub_att:4.2f} "
                     f"bass={bass:5.2f}/{bass_att:4.2f} "
                     f"mid={mid:5.2f}/{mid_att:4.2f} treb={treb:5.2f}/{treb_att:4.2f} "
-                    f"vol={vol:4.2f}")
+                    f"vol={vol:4.2f}  bpm={bpm:5.1f}/{beat_conf:.2f} "
+                    f"cen={centroid:.2f} flat={flatness:.2f} pan={pan:+.2f}")
             if args.debug:
                 line += (f"  raw=({raw[0]:6.3f} {raw[1]:6.3f} {raw[2]:6.3f} "
-                         f"sub={raw_sub:6.3f})")
+                         f"sub={raw_sub:6.3f} flux={raw_flux:6.3f})")
             print(line)
             last_print = now
 

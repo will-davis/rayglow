@@ -44,11 +44,13 @@ them.
 ## Invariants that look like bugs but aren't
 
 - **Two cross-machine contracts, both must stay in lockstep:**
-  - *The feature packet* — `sender/sender.py`'s `PACKET_FMT` (564 B, v1) and
+  - *The feature packet* — `sender/sender.py`'s `PACKET_FMT` (4236 B, v2) and
     `rayglow/feed/receiver.py` must change together and bump `VERSION`. The receiver
-    accepts v0 (556 B) + v1, substituting `sub = bass` for v0. The full
-    rules-that-look-wrong list (linear band thirds, equalize-on, the deliberately
-    inconsistent `analyze_sub`, deferred `sounddevice` import) is in `sender/CLAUDE.md`.
+    dispatches on `(version, byte length)` and accepts v0 (556 B) + v1 (564 B, `sub =
+    bass` for v0) + v2 (the richer spectrum/chroma/beat/stereo feed; v2-only fields
+    default to zero for older senders). The full rules-that-look-wrong list (linear band
+    thirds, equalize-on, the deliberately inconsistent `analyze_sub`, deferred
+    `sounddevice` import) is in `sender/CLAUDE.md`.
   - *The SPI frame* — `rayglow/render/hub75.py` packs a 64 KB bit-plane stream that the
     firmware's `Display::render` (`firmware/src/lib.rs`) drops into its framebuffer with
     zero touch-up. The packer and the firmware are a **1:1 port of each other**; change

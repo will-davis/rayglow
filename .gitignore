@@ -44,3 +44,6 @@ fp-info-cache
 # Editor / OS
 *.swp
 .DS_Store
+
+# KiCad session lock files
+*.lck
