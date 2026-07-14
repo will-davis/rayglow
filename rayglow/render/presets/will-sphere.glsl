@@ -22,7 +22,7 @@ const vec3 DOWN  = vec3(1.0,  0.3,  0.3);   // ddt while falling
 // The renderer supersamples (--scale), so gl_FragCoord counts RENDER
 // pixels, not LEDs.  Dividing by iResolution and multiplying by the panel
 // size gives honest 1-LED-wide columns at any --scale.
-const vec2 PANEL = vec2(256.0, 32.0);
+const vec2 PANEL = vec2(256.0, 64.0);
 
 
 // THE COLOR PALETTE
@@ -57,13 +57,13 @@ void mainImage(out vec4 O, in vec2 I) {
     // old texel 6 (.x sub theta, .yzw pkt_age/live/source_domain)
     vec4 meta  = vec4(texelFetch(iChannel0, ivec2(0, 1), 0).x,
                       texelFetch(iChannel0, ivec2(7, 2), 0).xyz);
-    vec2 uv = (I * 8. / PANEL.xy) / PANEL.y;
+    vec2 uv = (I * 200. / PANEL.xy) / PANEL.y;
 
     uv.x *= PANEL.x / PANEL.y;
     // uv.x = uv.x - 2.0;
     // uv = fract(uv);
-    uv -= 4.0;
-    uv.y += 3.5;
+    uv -= 0.0;
+    uv.y += 00.0;
     float d = length(uv);
 
     vec3 col = palette(d + iTime);
