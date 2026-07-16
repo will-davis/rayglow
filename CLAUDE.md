@@ -23,7 +23,12 @@ pipeline diagram and the repo map. The pieces:
     orients each frame, read back zero-copy through a dma-heap mmap (`dmabuf.py`,
     glReadPixels fallback), then `hub75.py` packs it and `pio_out.py` (default;
     `piobridge/` C shim over RP1 piolib) or `spi_out.py` (fallback) ships it to the
-    RP2350. Entry: `python -m rayglow.render`.
+    RP2350. Entry: `python -m rayglow.render`. A wall run also opens a TCP
+    **control plane** (`control.py`, port 5006): the mutagen-free push dev loop +
+    media controls, driven by `tools/rayglow_ctl.py` (`push`/`load`/`next`/`pause`/
+    `loop`/`scale`/`status`). `--no-control` skips it. Supersample scale is
+    per-shader: `--scale` > a `// rayglow: scale=N` directive (`textures.parse_settings`)
+    > `config.DEFAULT_SCALE`, live-adjustable via `rayglow-ctl scale`.
   - `rayglow/fake_sender.py` — music-free test harness, same packet struct.
   - `rayglow/spi_test.py` — static test pattern over the SPI fallback (no GL) to
     isolate link/firmware; `tools/pio_ramp.py` is the parallel-bus equivalent for
@@ -37,10 +42,12 @@ pipeline diagram and the repo map. The pieces:
 - **`tools/`** — `verify.py`: proves `render/hub75.py` is byte-identical to the firmware.
   `feed_check.py`: proves the feature-packet contract (sender ⇄ receiver ⇄ fake_sender);
   its `--live` mode pretty-prints real packets for sine-tone band verification.
+  `rayglow_ctl.py`: the control-plane client (`push`/`load`/media controls);
+  `control_check.py` locks its wire contract; `nvim-rayglow.lua` is the save-hook.
 - **`docs/design-history/`** — superseded design docs kept for provenance (MilkDrop
   reverse-engineering, the RP2350 PROJECT-PLAN, the build-history brain-dump).
 - **`ROADMAP.md`** — queued workstreams, one session's worth each (runtime brightness
-  side-band, now-playing/playlist control, per-shader directives). When Will says
+  side-band, per-shader directives). When Will says
   "pick up the next item" start there. (The audio-v3 packet overhaul shipped 2026-07;
   its brief + rationale are archived in `docs/design-history/`.)
 
@@ -103,7 +110,11 @@ There are three deploy targets: the **desktop** runs `sender/`; the **Pi** runs 
 source of truth: **mutagen** continuously one-way-syncs it to the Pi's `~/rayglow`
 (a second mutagen session pushes the private, out-of-repo `~/Projects/rayglow-shaders`
 to the Pi's `~/presets`). Editing here IS deploying — there is no `git pull` or sshfs
-mount step anymore. This repo (+ git history + `docs/design-history/`) is the durable
+mount step anymore. For the **live shader-dev loop**, mutagen's ~5–20s propagation
+is bypassed: `tools/rayglow_ctl.py push <file>` (or the nvim save-hook,
+`tools/nvim-rayglow.lua`) ships the edited shader straight to the running renderer's
+control plane (TCP 5006) for sub-100ms feedback; mutagen stays the durable
+background library sync. This repo (+ git history + `docs/design-history/`) is the durable
 shared memory across the machines — prefer writing knowledge into tracked files.
 Machine-specific addresses/paths are generalized to placeholders in tracked files; real
 values (and the mutagen session details) live in the gitignored `LOCAL-SETUP.md`
@@ -116,6 +127,8 @@ values (and the mutagen session details) live in the gitignored `LOCAL-SETUP.md`
 - Sender: `cd sender && uv run sender.py --debug` → 1 Hz status line.
 - Feature packet ≡ across sender/receiver/fake_sender: `uv run --with numpy
   tools/feed_check.py` (`--live` to watch real packets, e.g. under sine tones).
+- Control-plane wire contract (client ⇄ server framing, no hardware): `uv run
+  tools/control_check.py`.
 - Beat tracker: `cd sender && uv run beat.py` → click-track lock table.
 - Packer ≡ firmware: `uv run --with numpy tools/verify.py` (needs `cargo`).
 - Firmware builds: `cd firmware && cargo build` (nightly + `thumbv8m.main-none-eabihf`).

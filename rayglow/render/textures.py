@@ -53,6 +53,27 @@ def parse_directives(src):
     return {int(m.group(1)): m.group(2) for m in _DIRECTIVE.finditer(src)}
 
 
+# Loader settings namespace, parallel to the iChannel directives: a shader may
+# carry its own render tuning as `// rayglow: key=val ...` comments (survives
+# hot reload, keeps a pasted Shadertoy source valid). `scale` is the first
+# consumer (build_shader); gamma/fps/brightness are the planned others.
+_SETTINGS = re.compile(r"^\s*//\s*rayglow\s*:\s*(.+?)\s*$",
+                       re.MULTILINE | re.IGNORECASE)
+_KV = re.compile(r"(\w+)\s*=\s*(\S+)")
+
+
+def parse_settings(src):
+    """Extract `// rayglow: key=val ...` loader directives -> {key: str}.
+
+    Multiple lines merge; later keys win. Values stay strings — the consumer
+    validates/coerces (e.g. build_shader reads an int `scale`)."""
+    out = {}
+    for m in _SETTINGS.finditer(src):
+        for key, val in _KV.findall(m.group(1)):
+            out[key.lower()] = val
+    return out
+
+
 def image_channel(path, base_dir=None):
     """Load an image file as an iChannel texture (linear filter, repeat)."""
     from PIL import Image

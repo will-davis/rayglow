@@ -5,6 +5,14 @@ Everything downstream derives geometry from here — never hardcode 256/64.
 
 # ----------------------------------------------------------------------------
 # Panel geometry.  CHAIN is the one knob to change if a panel is added/removed.
+# Everything downstream derives from these — the renderer never hardcodes the
+# wall size, so a new wall is a config bump here, not a code change.
+#
+# Wall v1 (current, live): 4 wide x 2 tall of P6-3528-64x32 tiles = 256x64.
+# Wall v2 (in build, ~80% assembled 2026-07-16, see ROADMAP §5): 6 wide x 4 tall
+# of P4-2121-64x32 tiles = 384x128 (1536x512 mm) -> CHAIN = 6, PARALLEL_CHAINS =
+# 4. Do NOT flip these until v2 is powered and its transport (2x RP2350 vs FPGA)
+# is chosen — the running v1 wall depends on the current values.
 # ----------------------------------------------------------------------------
 ROWS = 32                       # pixels per panel, vertical
 COLS = 64                       # pixels per panel, horizontal
@@ -62,8 +70,23 @@ ROW_ROTATE_180 = [False, True]
 UDP_HOST = "0.0.0.0"            # listen on all interfaces
 UDP_PORT = 5005                 # add a firewall rule if the feed crosses VLANs/subnets
 
+# Renderer control plane (render/control.py): the live-dev push channel + media
+# controls. TCP, not UDP — control must be reliable/ordered (a dropped "next" or
+# a truncated shader push is a bug), the opposite of the lossy latest-wins feed.
+# Bound on all interfaces so the desktop/nvim push straight to the Pi (same reach
+# as the feed); firewall it if the LAN is untrusted, or set CONTROL_HOST to
+# "127.0.0.1" and reach it over an ssh tunnel.
+CONTROL_HOST = "0.0.0.0"
+CONTROL_PORT = 5006
+# Scratch dir the "push" command writes to (the tmp file that holds what's
+# running). Kept out of the mutagen-synced tree so a push never fights the sync.
+LIVE_DIR = "~/.cache/rayglow/live"
+
 # ----------------------------------------------------------------------------
 # Rendering
 # ----------------------------------------------------------------------------
 FALLBACK_AFTER = 0.5            # seconds without a packet before synth fallback kicks in
 RENDER_CORE = 0                # pin the render thread here so frame pacing is steady
+DEFAULT_SCALE = 2              # supersample factor when neither --scale nor a
+                               # shader's `// rayglow: scale=` directive is set
+                               # (1 = pixel-exact; 4 = smoother, ~16x GPU+readback)

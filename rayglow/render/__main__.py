@@ -40,9 +40,33 @@ foo.bufA.glsl..bufD.glsl are skipped; a shader that fails to compile is
 skipped too). Each switch rebuilds the shader fresh, so iTime/iFrame restart
 at 0 and multipass buffers start cleared:
     sudo ~/venv/bin/python -m rayglow.render presets/first.glsl --loop 30
+
+While running on hardware the renderer also opens a TCP control plane
+(render/control.py, port config.CONTROL_PORT=5006; --no-control to skip) — an
+mpd-style command channel.  Drive it with tools/rayglow_ctl.py from the Pi or
+the desktop:
+    rayglow-ctl push foo.glsl    # ship a local edit NOW (skips the file sync)
+    rayglow-ctl load ~/presets/bar.glsl   # switch to a shader already on the Pi
+    rayglow-ctl next / prev / play / pause / reload
+    rayglow-ctl loop 30 | loop off | repeat | status
+    rayglow-ctl scale 3 | scale auto      # live supersample change (rebuilds)
+`push` is the low-latency dev loop: it hands the source (plus buffer siblings
+and referenced image assets) straight to the running renderer, so the wall
+updates in <100ms instead of waiting on mutagen, and GLSL compile errors come
+back in the reply.  play/pause freeze the shader clock (the audio feed keeps
+running); loop/repeat/next/prev are the playlist controls over the launched
+shader's folder.  See tools/nvim-rayglow.lua for the save-hook.
+
+Supersample scale is per-shader and live: precedence is --scale > a shader's
+`// rayglow: scale=N` directive > config.DEFAULT_SCALE.  `scale N` sets a
+runtime override (sticky across switches until `scale auto` clears it back to
+the directive/default); each change reallocates FBOs, so it rebuilds the shader
+(iTime restarts).
 """
 import argparse
+import base64
 import os
+import queue
 import re
 import sys
 import threading
@@ -52,6 +76,8 @@ import numpy as np
 
 from ..feed import config  # geometry/gamma source of truth (shared feed pkg)
 
+from . import textures
+from .control import ControlServer, PlayerState
 from .egl import GLContext, GLError
 from .pipeline import ShaderToy
 from .reload import GlslWatcher
@@ -125,7 +151,37 @@ def maybe_reload(toy, watchers):
                   file=sys.stderr)
 
 
-def build_shader(args, use_pbo, shader_path, fatal=True):
+def _directive_scale(image_src):
+    """The `// rayglow: scale=N` directive from a shader source, validated to a
+    1..8 int, or None if absent/malformed."""
+    val = textures.parse_settings(image_src).get("scale")
+    if val is None:
+        return None
+    try:
+        n = int(val)
+    except ValueError:
+        print(f"shader setting: ignoring non-integer scale={val!r}",
+              file=sys.stderr)
+        return None
+    if not 1 <= n <= 8:
+        print(f"shader setting: clamping scale={n} to [1,8]", file=sys.stderr)
+        n = max(1, min(8, n))
+    return n
+
+
+def resolve_scale(scale_override, directive_scale):
+    """Effective supersample factor + where it came from.  Precedence: an
+    explicit override (CLI --scale, seeded into PlayerState, or a runtime
+    `scale` command) wins; else the shader's `// rayglow: scale=` directive;
+    else config.DEFAULT_SCALE.  Returns (scale, source)."""
+    if scale_override is not None:
+        return scale_override, "override"
+    if directive_scale is not None:
+        return directive_scale, "directive"
+    return config.DEFAULT_SCALE, "default"
+
+
+def build_shader(args, use_pbo, shader_path, fatal=True, scale_override=None):
     """Build a fresh ShaderToy + GlslWatchers for one shader file and its
     sibling buffer passes (foo.bufA.glsl .. foo.bufD.glsl).
 
@@ -133,16 +189,38 @@ def build_shader(args, use_pbo, shader_path, fatal=True):
     resolve regardless of order; buffers compile first, image last.  CLI
     --channelN overrides apply to the image pass.
 
+    Scale (supersample factor) is resolved per build: `scale_override` (the CLI
+    --scale seed or a runtime `scale` command) wins, else the image shader's
+    `// rayglow: scale=N` directive, else config.DEFAULT_SCALE.  A scale change
+    reallocates FBOs, which is exactly what this fresh build does — so runtime
+    scale rides the same rebuild path as a shader switch (there is no in-place
+    scale change).
+
     args.render_gamma / args.resolve_flip are derived in main(): the resolve
     pass bakes them in on the GPU (wall runs get PACK_GAMMA + config flips;
     dry-runs get --gamma and no flips, as before); legacy mode instead feeds
     --gamma to the CPU readback LUT.
 
     fatal=True (initial launch): a compile error exits the process.
-    fatal=False (--loop switch): a compile error prints, tears the half-built
-    toy back down, and returns (None, None) so the caller skips that shader.
+    fatal=False (--loop switch / control switch): a compile error prints, tears
+    the half-built toy back down, and returns (None, None, msg) so the caller
+    keeps the last good shader and can relay `msg` to a control client.
+
+    Returns (toy, watchers, err): err is None on success, else the compile
+    message (fatal=False only).
     """
-    toy = ShaderToy(args.width, args.height, scale=args.scale,
+    # Read the image source up front so the `// rayglow: scale=` directive can
+    # size the FBOs (ShaderToy allocates at scale on construction).
+    image_watcher = GlslWatcher(shader_path)
+    try:
+        image_src = image_watcher.read()
+    except OSError:
+        image_src = ""
+    scale, scale_src = resolve_scale(scale_override, _directive_scale(image_src))
+    if scale_src != "default":
+        print(f"scale: {scale}x ({scale_src})")
+
+    toy = ShaderToy(args.width, args.height, scale=scale,
                     gamma=args.render_gamma, use_pbo=use_pbo,
                     readback=args.readback, resolve_flip=args.resolve_flip,
                     quiet=not fatal,
@@ -159,7 +237,7 @@ def build_shader(args, use_pbo, shader_path, fatal=True):
         if os.path.exists(path):
             toy.add_buffer(f"buf{x}")
             watchers[f"buf{x}"] = GlslWatcher(path)
-    watchers["image"] = GlslWatcher(shader_path)
+    watchers["image"] = image_watcher   # reuse the early read; keeps image last
     if len(watchers) > 1:
         print(f"multipass: {', '.join(watchers)} "
               f"(buffers: {toy.buffer_format[3]})")
@@ -169,13 +247,13 @@ def build_shader(args, use_pbo, shader_path, fatal=True):
         else:
             ok, msg = toy.set_source(name, watcher.read())
             if not ok:
-                print(f"--loop: skipping {shader_path} — compile error "
+                print(f"build: {shader_path} compile error "
                       f"({name}):\n{msg}", file=sys.stderr)
                 toy.destroy()
-                return None, None
+                return None, None, f"compile error ({name}): {msg}"
             if msg:
                 print(f"warning ({name}): {msg}", file=sys.stderr)
-    return toy, watchers
+    return toy, watchers, None
 
 
 def build_playlist(shader_path):
@@ -189,17 +267,47 @@ def build_playlist(shader_path):
     return [os.path.join(d, n) for n in names]
 
 
-def _next_compilable(playlist, index, args, use_pbo):
-    """Walk forward from `index` (wrapping) and build the next shader that
-    compiles.  Returns (new_index, toy, watchers), or None if a full lap finds
-    nothing that compiles (caller keeps showing the current shader)."""
-    n = len(playlist)
-    for step in range(1, n):
-        j = (index + step) % n
-        toy, watchers = build_shader(args, use_pbo, playlist[j], fatal=False)
-        if toy is not None:
-            return j, toy, watchers
-    return None
+def switch_to(old_toy, feed, player, args, use_pbo, path, display_name=None):
+    """Full rebuild -> hot-swap: build a fresh toy for `path`, and on success
+    destroy the outgoing one, repoint the live audio feed at the new channels,
+    and reset the (pausable) shader clock to 0.  Playlist/index are the caller's
+    to manage.  Returns (new_toy, new_watchers, None) on success, or
+    (None, None, err) on failure with `old_toy` left untouched (last good
+    shader stays on the wall)."""
+    path = os.path.abspath(os.path.expanduser(path))
+    if not os.path.isfile(path):
+        return None, None, f"no such shader: {path}"
+    new_toy, new_watchers, err = build_shader(args, use_pbo, path, fatal=False,
+                                              scale_override=player.scale_override)
+    if new_toy is None:
+        return None, None, err
+    old_toy.destroy()                       # free the outgoing toy's GL objects
+    feed.channels = new_toy.audio_channels  # repoint the live feed
+    player.current_path = path
+    player.display_name = display_name or os.path.basename(path)
+    player.scale = new_toy.scale             # effective scale after precedence
+    player.shader_time = 0.0                 # full rebuild => iTime/iFrame = 0
+    player.shader_frame = 0
+    return new_toy, new_watchers, None
+
+
+def _advance(toy, feed, player, args, use_pbo, step):
+    """Walk the folder playlist by `step` (+1 next / -1 prev, wrapping) to the
+    next shader that compiles and switch to it, updating player.index.  Shared
+    by --loop auto-advance and the next/prev commands.  Returns
+    (new_toy, new_watchers, None) or (None, None, err) (keep current)."""
+    pl = player.playlist
+    n = len(pl)
+    if n == 0:
+        return None, None, "playlist empty"
+    start = player.index if player.index >= 0 else 0
+    for k in range(1, n + 1):
+        j = (start + step * k) % n
+        nt, nw, _err = switch_to(toy, feed, player, args, use_pbo, pl[j])
+        if nt is not None:
+            player.index = j
+            return nt, nw, None
+    return None, None, "no compilable shader in folder"
 
 
 def run_dry(toy, feed, args):
@@ -291,7 +399,156 @@ class _SendPipe:
         self._out.close()
 
 
-def run_wall(toy, watchers, feed, args, use_pbo=False, playlist=None, index=0):
+_BUF_KEY = re.compile(r"buf[A-D]")
+
+
+def _safe_rel(rel):
+    """Sanitize a client-supplied asset path: drop absolute/`..` components so a
+    push can't write outside LIVE_DIR."""
+    parts = [p for p in rel.replace("\\", "/").split("/")
+             if p and p not in (".", "..")]
+    return os.path.join(*parts) if parts else ""
+
+
+def _write_live_slot(msg):
+    """Write a pushed bundle into LIVE_DIR (the tmp file that holds what's
+    running) and return the image .glsl path.  Clears this shader's stale buffer
+    siblings first, so a bufX removed in the editor doesn't linger and get
+    auto-discovered on the rebuild.  `msg`: {name, passes{image,bufA..D},
+    assets?{relpath: base64}}."""
+    passes = msg.get("passes") or {}
+    if "image" not in passes:
+        raise ValueError("push: bundle has no image pass")
+    live = os.path.expanduser(config.LIVE_DIR)
+    os.makedirs(live, exist_ok=True)
+    name = os.path.basename(msg.get("name") or "now-playing.glsl")  # no traversal
+    if not name.endswith(".glsl"):
+        name += ".glsl"
+    base = re.sub(r"\.glsl$", "", name)
+    for x in "ABCD":
+        stale = os.path.join(live, f"{base}.buf{x}.glsl")
+        if os.path.exists(stale):
+            os.remove(stale)
+    image_path = os.path.join(live, name)
+    with open(image_path, "w") as f:
+        f.write(passes["image"])
+    for key, src in passes.items():
+        if key == "image":
+            continue
+        if not _BUF_KEY.fullmatch(key):
+            raise ValueError(f"push: bad pass name {key!r}")
+        with open(os.path.join(live, f"{base}.{key}.glsl"), "w") as f:
+            f.write(src)
+    for rel, b64 in (msg.get("assets") or {}).items():
+        safe = _safe_rel(rel)
+        if not safe:
+            continue
+        dst = os.path.join(live, safe)
+        os.makedirs(os.path.dirname(dst) or live, exist_ok=True)
+        with open(dst, "wb") as f:
+            f.write(base64.b64decode(b64))
+    return image_path
+
+
+def _reseat_playlist(player, path):
+    """Rebuild the folder playlist around `path` and point index at it."""
+    player.playlist = build_playlist(path)
+    ap = os.path.abspath(path)
+    player.index = player.playlist.index(ap) if ap in player.playlist else -1
+
+
+def _run_command(msg, toy, watchers, feed, player, args, use_pbo):
+    """Execute one control command on the render thread and return
+    (toy, watchers, reply).  Switching commands reassign toy/watchers on
+    success; everything else just mutates player state."""
+    c = msg.get("cmd")
+    if c == "status":
+        return toy, watchers, {"ok": True, **player.snapshot()}
+    if c == "play":
+        player.paused = False
+        return toy, watchers, {"ok": True, "paused": False}
+    if c == "pause":
+        player.paused = True
+        return toy, watchers, {"ok": True, "paused": True}
+    if c == "repeat":
+        player.repeat = bool(msg["on"]) if "on" in msg else not player.repeat
+        return toy, watchers, {"ok": True, "repeat": player.repeat}
+    if c == "loop":
+        if msg.get("off"):
+            player.loop_interval = None
+        else:
+            secs = msg.get("seconds")
+            if not isinstance(secs, (int, float)) or secs <= 0:
+                return toy, watchers, {"ok": False,
+                                       "error": "loop: need seconds > 0 or off"}
+            player.loop_interval = float(secs)
+        return toy, watchers, {"ok": True, "loop": player.loop_interval}
+    if c == "scale":
+        # Set the override (or clear it back to auto = defer to directive/
+        # default), then rebuild the current shader at the new scale — an FBO
+        # realloc, so it goes through the full-rebuild switch path.
+        v = msg.get("value")
+        if v in (None, "auto"):
+            player.scale_override = None
+        elif isinstance(v, int) and not isinstance(v, bool) and 1 <= v <= 8:
+            player.scale_override = v
+        else:
+            return toy, watchers, {"ok": False,
+                                   "error": "scale: an int 1..8 or 'auto'"}
+        nt, nw, err = switch_to(toy, feed, player, args, use_pbo,
+                                player.current_path,
+                                display_name=player.display_name)
+        if nt is None:
+            return toy, watchers, {"ok": False, "error": err or "rebuild failed"}
+        print(f"control: scale {player.scale}x"
+              + ("" if player.scale_override is not None else " (auto)"))
+        return nt, nw, {"ok": True, **player.snapshot()}
+    if c in ("load", "reload", "push", "next", "prev"):
+        if c == "load":
+            nt, nw, err = switch_to(toy, feed, player, args, use_pbo,
+                                    msg["path"])
+            if nt is not None:
+                _reseat_playlist(player, player.current_path)
+        elif c == "reload":
+            nt, nw, err = switch_to(toy, feed, player, args, use_pbo,
+                                    player.current_path,
+                                    display_name=player.display_name)
+        elif c == "push":
+            image_path = _write_live_slot(msg)
+            nt, nw, err = switch_to(toy, feed, player, args, use_pbo,
+                                    image_path, display_name=msg.get("name"))
+            if nt is not None:
+                _reseat_playlist(player, image_path)
+        else:                                     # next / prev
+            nt, nw, err = _advance(toy, feed, player, args, use_pbo,
+                                   +1 if c == "next" else -1)
+        if nt is None:
+            return toy, watchers, {"ok": False, "error": err or "switch failed"}
+        print(f"control: now showing {player.display_name}")
+        return nt, nw, {"ok": True, **player.snapshot()}
+    return toy, watchers, {"ok": False, "error": f"unknown command: {c!r}"}
+
+
+def drain_commands(cmd_queue, toy, watchers, feed, player, args, use_pbo):
+    """Execute every queued control command on the render thread and fill each
+    reply.  Returns the possibly-new (toy, watchers).  A bad command can never
+    kill the render loop — it's caught and reported to that client."""
+    while True:
+        try:
+            cmd = cmd_queue.get_nowait()
+        except queue.Empty:
+            break
+        try:
+            toy, watchers, reply = _run_command(
+                cmd.msg, toy, watchers, feed, player, args, use_pbo)
+        except (OSError, ValueError, KeyError, TypeError) as e:
+            reply = {"ok": False, "error": f"{type(e).__name__}: {e}"}
+        cmd.reply = reply
+        cmd.done.set()
+    return toy, watchers
+
+
+def run_wall(toy, watchers, feed, args, player, cmd_queue, use_pbo=False):
     """Render + pack + ship frames to the rp2350b over the link.
 
     Gamma: the GPU resolve pass bakes pow(x, PACK_GAMMA) into the frame, so
@@ -306,10 +563,14 @@ def run_wall(toy, watchers, feed, args, use_pbo=False, playlist=None, index=0):
     default, SPI fallback). The READY handshake self-paces: out.send() blocks
     until the rp2350b has armed its RX DMA, then pushes one 64 KB transfer.
 
-    With a `playlist` (--loop), every args.loop seconds the current shader is
-    torn down and the next compilable shader in the folder is built fresh —
-    `index` tracks the position.  The feed (audio state + UDP socket) and the
-    hardware link persist across switches; only the toy is swapped.
+    `player` (PlayerState) holds all playback state — the folder playlist,
+    loop/repeat/pause, and the pausable shader clock.  Two things drive shader
+    switches, both via switch_to/_advance: --loop auto-advance
+    (player.loop_interval) and control commands drained from `cmd_queue` each
+    frame (load/push/next/prev/reload).  The feed (audio state + UDP socket) and
+    the hardware link persist across switches; only the toy is swapped.  Pause
+    freezes the shader clock (iTime/iFrame) but not the feed — audio keeps
+    flowing so a resume picks up live.
     """
     from .hub75 import (LUT_IDENTITY, build_gamma_lut, pack, pack_single,
                         to_single_chain)
@@ -344,10 +605,10 @@ def run_wall(toy, watchers, feed, args, use_pbo=False, playlist=None, index=0):
     t0 = time.perf_counter()
     last = t0
     fps_frames, fps_t = 0, t0
-    # The shader clock (iTime/iFrame) is per-shader so each --loop switch
-    # restarts at 0; t0 stays global for --duration and the (continuous) feed.
-    shader_t0 = t0
-    shader_frame = 0
+    # The shader clock lives on `player` now: player.shader_time accumulates real
+    # dt only while not paused (so pause freezes iTime/iFrame and resume doesn't
+    # jump), and a switch resets it to 0.  t0 stays global for --duration and the
+    # continuous feed.  switch_t paces --loop auto-advance.
     switch_t = t0
     # Per-stage accumulators. render+pack run on this thread; the SPI transfer
     # runs on the worker (pipe.acc_send). `acc_wait` is how long this thread
@@ -369,25 +630,37 @@ def run_wall(toy, watchers, feed, args, use_pbo=False, playlist=None, index=0):
             now = time.perf_counter()
             if args.duration and now - t0 >= args.duration:
                 break
-            # --loop: time to advance to the next shader in the folder.
-            if playlist and now - switch_t >= args.loop:
+            # Control plane: drain any queued commands (load/push/next/prev/...)
+            # on this thread — GL is thread-affine, so the socket threads only
+            # enqueue.  A switch resets switch_t so auto-advance doesn't fire on
+            # top of a manual one.
+            prev_toy = toy
+            toy, watchers = drain_commands(cmd_queue, toy, watchers, feed,
+                                           player, args, use_pbo)
+            if toy is not prev_toy:
                 switch_t = now
-                nxt = _next_compilable(playlist, index, args, use_pbo)
-                if nxt is not None:
-                    index, new_toy, watchers = nxt
-                    toy.destroy()              # free the outgoing toy's GL objects
-                    toy = new_toy
-                    feed.channels = toy.audio_channels  # repoint the live feed
-                    shader_t0, shader_frame = now, 0    # restart this shader's clock
-                    print(f"--loop: now showing {os.path.basename(playlist[index])}")
+            # --loop auto-advance: only while looping, not held (repeat) or paused.
+            if (player.loop_interval and not player.repeat and not player.paused
+                    and len(player.playlist) > 1
+                    and now - switch_t >= player.loop_interval):
+                switch_t = now
+                nt, nw, _err = _advance(toy, feed, player, args, use_pbo, +1)
+                if nt is not None:
+                    toy, watchers = nt, nw
+                    print(f"loop: now showing {player.display_name}")
             maybe_reload(toy, watchers)
             if feed:
                 feed.update(now - t0, now - last)
             ta = time.perf_counter()
-            # (H,W,3) uint8; shader clock is per-shader (resets on switch).
-            # Resolve-pass modes return gamma-corrected, already-oriented
-            # frames; legacy returns LINEAR unflipped ones.
-            buf = toy.render(now - shader_t0, now - last, shader_frame)
+            # (H,W,3) uint8. The shader clock is pausable and per-shader (resets
+            # on switch); pass dt=0 while paused so iTimeDelta freezes too.
+            # Resolve-pass modes return gamma-corrected, already-oriented frames;
+            # legacy returns LINEAR unflipped ones.
+            shader_dt = 0.0 if player.paused else now - last
+            buf = toy.render(player.shader_time, shader_dt, player.shader_frame)
+            if not player.paused:
+                player.shader_time += now - last
+                player.shader_frame += 1
             if legacy:
                 # Physical-install orientation (see config): flip on the CPU;
                 # the resolve pass does this on the GPU in the other modes.
@@ -412,12 +685,12 @@ def run_wall(toy, watchers, feed, args, use_pbo=False, playlist=None, index=0):
             acc_wait += wait              # stall on the previous send (overlap residue)
             last_bytes = len(payload)
             last = now
-            shader_frame += 1
 
             fps_frames += 1
 
             if now - fps_t >= 5.0:
                 n = fps_frames
+                player.fps = n / (now - fps_t)   # published via `status`
                 # send = the worker's actual transfer time (link cost); wait =
                 # how much it leaked into the critical path. If wait hugs 0 the
                 # link is fully hidden and `render` is the clamp; if wait ~ send,
@@ -460,9 +733,12 @@ def main():
                     "mainImage() code, pasted unchanged")
     ap.add_argument("--fps", type=float, default=120.0,
                     help="target fps cap (default 120)")
-    ap.add_argument("--scale", type=int, default=2,
-                    help="supersample factor (default 2; 1 = pixel-exact, 4 = "
-                         "smoother but ~4x the GPU+readback cost)")
+    ap.add_argument("--scale", type=int, default=None,
+                    help="supersample factor. Precedence: this flag > a shader's "
+                         "`// rayglow: scale=N` directive > config.DEFAULT_SCALE "
+                         f"({config.DEFAULT_SCALE}). 1 = pixel-exact, 4 = smoother "
+                         "but ~16x the GPU+readback cost. Adjustable live over the "
+                         "control plane (rayglow-ctl scale N|auto)")
     ap.add_argument("--gamma", type=float, default=1.0,
                     help="dry-run gamma (default 1.0 = LINEAR). Wall runs "
                          "ignore this: gamma there is config.PACK_GAMMA, "
@@ -528,6 +804,13 @@ def main():
     ap.add_argument("--pbo", action="store_true",
                     help="async PBO readback (experimental; measured SLOWER on "
                          "the Pi's V3D — default is the synchronous path)")
+    ap.add_argument("--no-control", action="store_true",
+                    help="don't open the TCP control plane (render/control.py). "
+                         "By default the wall run listens on config.CONTROL_PORT "
+                         "for push/load/next/prev/play/pause/loop/repeat/status "
+                         "(see tools/rayglow_ctl.py)")
+    ap.add_argument("--control-port", type=int, default=config.CONTROL_PORT,
+                    help=f"control-plane TCP port (default {config.CONTROL_PORT})")
     args = ap.parse_args()
 
     # Geometry defaults to the full two-chain display (256x64).
@@ -568,32 +851,53 @@ def main():
     else:
         args.render_gamma = config.PACK_GAMMA
         args.resolve_flip = (config.FLIP_V, config.FLIP_H)
-    toy, watchers = build_shader(args, use_pbo, args.shader, fatal=True)
+    toy, watchers, _ = build_shader(args, use_pbo, args.shader, fatal=True,
+                                    scale_override=args.scale)
+    assert toy is not None       # fatal=True exits on a compile error
 
     feed = AudioFeed(toy.audio_channels,
                      allow_listen=not args.no_listen and not dry)
 
-    # --loop: build the folder playlist and find where the launched shader sits.
-    # Ignored in dry-run (the GIF is a single shader). One-shader folders just
-    # run normally.
-    playlist, index = None, 0
-    if args.loop is not None and not dry:
-        playlist = build_playlist(args.shader)
-        start = os.path.abspath(args.shader)
-        index = playlist.index(start) if start in playlist else 0
+    if dry:
+        run_dry(toy, feed, args)
+        return
+
+    # Playback state for the live loop.  The folder playlist is always built (so
+    # next/prev/loop work without --loop); --loop just seeds the auto-advance
+    # interval.  index = -1 means the current shader isn't a member of its own
+    # folder listing (shouldn't happen for a real launch, but stays safe).
+    start = os.path.abspath(args.shader)
+    playlist = build_playlist(args.shader)
+    index = playlist.index(start) if start in playlist else -1
+    player = PlayerState(playlist, index, loop_interval=args.loop,
+                         display_name=os.path.basename(start), current_path=start,
+                         scale_override=args.scale, scale=toy.scale)
+    if args.loop is not None:
         if len(playlist) <= 1:
             print(f"--loop: only one shader in {os.path.dirname(start)} — "
-                  "nothing to cycle")
-            playlist = None
+                  "nothing to cycle (next/prev/load still work over control)")
         else:
             print(f"--loop: cycling {len(playlist)} shaders every "
                   f"{args.loop:g}s")
 
-    if dry:
-        run_dry(toy, feed, args)
-    else:
-        run_wall(toy, watchers, feed, args,
-                 use_pbo=use_pbo, playlist=playlist, index=index)
+    # Control plane: a background TCP server hands commands to this render thread
+    # via cmd_queue.  Bind failure (port in use) is non-fatal — run without it.
+    cmd_queue = queue.Queue()
+    server = None
+    if not args.no_control:
+        try:
+            server = ControlServer(cmd_queue, port=args.control_port)
+            print(f"control: listening on TCP {config.CONTROL_HOST}:"
+                  f"{args.control_port}")
+        except OSError as e:
+            print(f"control: disabled — could not bind port "
+                  f"{args.control_port}: {e}", file=sys.stderr)
+
+    try:
+        run_wall(toy, watchers, feed, args, player, cmd_queue, use_pbo=use_pbo)
+    finally:
+        if server is not None:
+            server.close()
 
 
 if __name__ == "__main__":

@@ -76,7 +76,7 @@ KiCad project, and fab Gerbers are in [`hardware/`](hardware/).
 |---|---|
 | `sender/` | **desktop half** — the feature daemon (`sender.py`), its own uv project (numpy + sounddevice). [sender/README.md](sender/README.md) has the protocol + feature detail. |
 | `rayglow/feed/` | the audio-feature feed: packet `receiver`, `FeatureState`, and the rig `config` (geometry/network/gamma). Shared, dependency-free. |
-| `rayglow/render/` | **the live renderer** — headless EGL + GLES3, multipass pipeline, iChannel textures (`audio`, `milk`, noise, images), hot reload, the GPU resolve pass + zero-copy dma-heap readback (`output.py`, `dmabuf.py`), the frame packer (`hub75.py`) + link backends (`spi_out.py`, `pio_out.py` / `piobridge/`), and `presets/*.glsl`. |
+| `rayglow/render/` | **the live renderer** — headless EGL + GLES3, multipass pipeline, iChannel textures (`audio`, `milk`, noise, images), hot reload, a TCP **control plane** (`control.py`: push/switch shaders + media controls), the GPU resolve pass + zero-copy dma-heap readback (`output.py`, `dmabuf.py`), the frame packer (`hub75.py`) + link backends (`spi_out.py`, `pio_out.py` / `piobridge/`), and `presets/*.glsl`. |
 | `rayglow/fake_sender.py` | music-free test harness; emits the same packet struct with synthesized features. |
 | `rayglow/spi_test.py` | static SPI test pattern (no GL) — isolates the link/firmware from the renderer. |
 | `firmware/` | **RP2350b Rust firmware** — zero-CPU PIO+DMA HUB75 scan-out, brought up in verifiable phases. [firmware/README.md](firmware/README.md). |
@@ -145,7 +145,11 @@ bootstrap and `cargo run`/`probe-rs` instructions are in
 
 Working end-to-end: the desktop sender feeds the renderer, which packs frames the
 firmware accepts byte-for-byte (`tools/verify.py` is green). The renderer hot-reloads
-`.glsl` files live (edit, save, watch the panel recompile). The Phase 6 4-lane parallel
+`.glsl` files live (edit, save, watch the panel recompile); for the fast dev loop a TCP
+control plane (`tools/rayglow_ctl.py push`, or the `tools/nvim-rayglow.lua` save-hook)
+ships edits straight to the running renderer in <100ms — skipping the file-sync lag —
+and adds media controls (next/prev/play/pause/loop) plus live per-shader supersample
+scale (`// rayglow: scale=N` directive or `rayglow-ctl scale`). The Phase 6 4-lane parallel
 bus is the production transport (hardware-verified on the custom HAT, driving the full
 256×64 wall); the Phase 5 SPI link remains the proven fallback. A microphone input path
 exists (`sender/esp32-mic/` + `sender/espnow-dongle/`). Next: pulling config into a
