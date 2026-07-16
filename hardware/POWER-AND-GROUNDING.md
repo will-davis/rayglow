@@ -97,6 +97,28 @@ internal rail** brought out to three terminal pairs (paralleled, rated 20 A for 
 Current topology (3 channels starred at PSU(−), HAT ribbon GND the only other bridge) is
 **textbook-correct single-supply grounding**. Remaining lever = fatten the copper.
 
+## Wall v2: two 300 W supplies for 384×128 (24 panels)
+
+The v2 wall (ROADMAP §5) is 6×4 = **24** P4-2121-64x32 tiles, so one 60 A brick
+no longer covers it: at the wire-gauge section's ~7.5 A/panel worst case that's
+~180 A (~900 W) of all-white headroom. v2 runs **2× 5 V / 300 W / 60 A**
+transformers (2nd arrives 2026-07-17) — 600 W / 120 A total, which comfortably
+carries audio-reactive content (rarely near full white) but **not** a sustained
+all-white 24-panel frame, so brightness capping / content limits (ROADMAP §1)
+matter more at this size. Two supplies = two rails; extend the single-supply
+star-ground rules above:
+- **Bond both PSU (−) terminals at ONE star point** (a single heavy strap) so
+  the two halves and the HAT/SBC logic GND share one reference. Don't let panel
+  return current find a second path through the logic ground.
+- **Split the wall by supply** (e.g. 12 panels each); keep each rail's fat +5 V
+  and return copper to its own panels. Do **not** cross-feed +5 V between the two
+  rails — parallel supplies fight on load-share.
+- The SBC/HAT logic rail rides **one** supply's (−) reference (or a small
+  dedicated supply), never floating between the two.
+
+If the wall grows past this, or the runs get long, the HV-distribution idea
+below (buck 12/24 V → 5 V at each cluster) is the next step.
+
 ## Measuring correctly (Kelvin / differential)
 
 Reference the scope (−) at the *exact node of interest* — panel logic GND at the panel

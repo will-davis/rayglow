@@ -47,3 +47,16 @@ manufacturing output — send that folder (zipped) to a board house.
 > Bench-gear note: the original plan's §14 instrumentation reality-check (e.g. the
 > ≥100 MHz scope needed to validate 256-wide pixel-clock signal integrity) lives in
 > [`../docs/design-history/PROJECT-PLAN.md`](../docs/design-history/PROJECT-PLAN.md).
+
+## Wall v2 (in progress, ~80% assembled 2026-07-16)
+
+This HAT drives one 256×64 tile (chains A & B). The **v2 wall** scales up to
+**6 wide × 4 tall of P4-2121-64x32 tiles = 384×128 px** (1536×512 mm), on a 2020
+T-slot aluminium frame (2 horizontal + 4 vertical members) with 3D-printed panel
+connectors in [`3dprint/`](3dprint/) (`P4-*`, **WIP — not committed until the PoC
+is built**; the tracked STLs there are the HAT enclosure). Power moves to **2×
+5 V/300 W/60 A** supplies split across the wall — see
+[`POWER-AND-GROUNDING.md`](POWER-AND-GROUNDING.md) (§ "Wall v2"). Driving 24 tiles
+exceeds one RP2350's SRAM/PIO envelope, so the transport (two RP2350s vs the FPGA
+translator) is decided during bring-up — full plan + geometry in
+[`../ROADMAP.md`](../ROADMAP.md) §5.
