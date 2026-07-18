@@ -1,7 +1,9 @@
 # RayGLow firmware (RP2350)
 
 Zero-CPU HUB75 RGB-matrix scan-out engine for the **RP2350** (PIO + DMA),
-driving 8× 64×32 panels (256×64) over two parallel chains. This is the
+driving 24× 64×32 panels (384×128) over two parallel chains of 12 — one chip for
+the whole wall, at 385 KB of its 512 KB SRAM (the measured ceiling is 15
+panels/chain = 30 panels; see [`../ROADMAP.md`](../ROADMAP.md) §5). This is the
 downstream end of the RayGLow pipeline: the Pi 5 renders + packs frames and
 ships them over the 4-lane parallel PIO bus (SPI as fallback — see the
 repo-root [`README.md`](../README.md)); this firmware receives them and drives

@@ -95,11 +95,11 @@ Full analysis in
 - **Single-chain fold vectorization** (item 9) — only matters if a single-chain
   rig grows.
 - **GPU pack pass** (bit-plane extraction as a fragment shader, readback = the
-  64 KB wire stream) — the prep that makes the next wall cheap on the Pi side.
-  Note the RP2350 SRAM ceiling analysis assumed ONE chip; Will's current plan
-  is **two RP2350s on the Pi 5** for the big wall, which halves per-chip
-  framebuffer needs (512×128 double-buffered fits again) and needs the link/
-  packer split per chip instead of the FPGA translator.
+  wire stream) — the prep that makes the next wall cheap on the Pi side. Worth
+  more than it was: the v2 wall CPU-packs a 192 KB frame from 3× the pixels every
+  frame. (The old note here assumed the big wall needed **two RP2350s**; it does
+  not — one chip drives all 24 tiles at 75% SRAM and the measured ceiling is 30
+  panels. See item 5.)
 
 ## 4. Feed-v3 tuning backlog (small, wall-time driven)
 
@@ -114,37 +114,72 @@ shows problems:
 - Beat tracker on real music: octave locks (conf dips on relock), re-tempo
   ramp continuity on the milk-features card.
 
-## 5. Wall v2 — the 384×128 panel + the transport split
+## 5. Wall v2 — 384×128 bring-up (host + firmware shipped, wall unbuilt)
 
-The next physical wall, ~80% assembled as of 2026-07-16. Bigger in every axis;
-the open question is how to drive it.
+The next physical wall, ~80% assembled as of 2026-07-16. **The transport question
+is settled: ONE RP2350b drives all 24 tiles on two chains.** Host + firmware
+support landed 2026-07-17; what remains is physical (cabling, power, SI).
 
-**Geometry.** 6 panels wide × 4 tall of **P4-2121-64x32** tiles (P4 pitch, 2121
-LEDs; ambiguous vendor model, named by mirroring the current wall's
-`P6-3528-64x32`) = **384 × 128 px**, physical **1536 × 512 mm**. In
-`config.py` terms that's `CHAIN = 6`, `PARALLEL_CHAINS = 4` (today's wall is
-4 / 2 = 256×64) — the renderer derives everything from those, so the Pi side is
-a config bump, not a code change. Pixel count is **3× today's** (49 152 vs
-16 384), so the V3D render + readback cost scales with it — the new per-shader /
-runtime `scale` control (item 2) is the budget knob.
+**Geometry.** 6 wide × 4 tall of **P4-2121-64x32** tiles (P4 pitch, 2121 LEDs;
+ambiguous vendor model, named by mirroring the old wall's `P6-3528-64x32`) =
+**384 × 128 px**, physical **1536 × 512 mm**. `config.py` is now
+`PANEL_COLS = 6`, `PANEL_ROWS = 4`; `PARALLEL_CHAINS` stays 2 (the HAT + the u16
+engine are hardwired to two chains), so each chain carries 12 panels serpentined
+over two panel rows and `render/hub75.to_chains` folds the wall into the two
+768-wide electrical strips. Pixel count is **3× the old wall** (49 152 vs
+16 384), so V3D render + readback scale with it — per-shader / runtime `scale`
+(item 2) is the budget knob.
 
-**Power.** 2× **300 W 5 V 60 A** AC/DC transformers (the 2nd arrives 2026-07-17;
-bring-up/testing starts then). At P4 full-white the 24 tiles pull well past one
-supply, so the two rails split the wall — see POWER-AND-GROUNDING for the
-star-ground + HV-distribution rules that must extend to a two-PSU feed.
+**Why one chip, not two (the ROADMAP was wrong).** The old estimate called
+~384 KB of double-buffered framebuffer "borderline against the 520 KB SRAM". Two
+errors: the linker's pool is **512 KB** (`memory.x`; banks 8/9 are separate 4 KB
+regions), and the u16 cell packs *both* chains, so RAM scales with chain **width
+only** (`fb_cells()` is independent of `CHAINS`) = 32 KB per panel-per-chain
+double-buffered. Measured by linking `phase6-parallel --features two-chain` at
+rising widths: **12/chain = 385 KB = 75%, and 15/chain (30 panels) is the last
+that links; 16 overflows by 96 bytes.** So the two-RP2350 split and the FPGA
+translator are both **unnecessary for this wall** — they stay the escape hatch
+only if a *future* wall passes 30 panels or the SI math stops closing.
+
+**The cost is refresh, not brightness.** Tripling chain width triples per-plane
+shift time, diluting duty cycle (a plane costs `max(shift, lit)` — the row SM
+waits on both). At the old `OE_GAIN` 64 the 768-wide wall sits at 39% duty vs the
+old 72%. **`OE_GAIN` 192 restores 72% — identical brightness and average LED
+current — by spending refresh: ~430 Hz → ~143 Hz**, far above flicker (more
+visible to cameras than to eyes). Colour is untouched (binary plane ratios hold).
+Link frame grows 64 KB → 192 KB, capping the wire at ~83 fps (over the 60 target).
+
+**Remaining unknown: signal integrity on a 12-deep chain** — only 4 was ever
+validated (§11.7). This is the whole risk now, and it can only be settled on the
+bench. If it glitches, raise `DATA_CLK_DIV`: div 4 (18.8 MHz) still gives ~153 Hz
+at gain 128. **Bring up staged**: set `PANEL_ROWS = 2` and cable 6×2 first — one
+panel row per chain makes the fold the identity (`fold_check.py` proves this at
+the packed-byte level), so a glitch there is SI, not the fold. Then `PANEL_ROWS =
+4`. Firmware `PANELS_IN_CHAIN` must match the Pi's `config.CHAIN` (6 then 12) —
+a fixed-size contract, and a mismatch desyncs the link **silently**;
+`tools/fold_check.py` prints the value the Pi expects.
+
+**Confirm the cabling** with `python -m rayglow.spi_test` (now runs over the
+production `--transport pio`, no reflash): every panel carries cyan column-count
+and orange row-count dots. IDs out of order ⇒ `CHAIN_ORDER`; a row upside-down ⇒
+`ROW_ROTATE_180`; a row mirrored ⇒ `serpentine(first_row_reversed=)`. Whether a
+strip starts at the left or right of its row depends on where the HAT plugs in
+and **cannot** be derived from the desk.
+
+**Power.** 2× **300 W 5 V 60 A** transformers (2nd arrived 2026-07-17) — 600 W /
+120 A, comfortable for audio-reactive content but **not** sustained all-white 24
+tiles, so brightness capping (item 1) matters more at this size. Split the wall
+by supply on the **horizontal midline** so the PSU split coincides with the
+chain A / chain B split — each rail's return current then stays inside its own
+chain's domain. Bond both PSU (−) at one star point; see POWER-AND-GROUNDING.
 
 **Frame.** 2020 extruded-aluminium T-slot: 2 horizontal + 4 vertical members,
 tied to the panels by 3D-printed connectors under `hardware/3dprint/` (P4-*).
 Those parts are **WIP — tolerances still iterating; do NOT `git add` them until
 the PoC is fully built** (the tracked STLs there are the HAT enclosure only).
 
-**Open decision — transport (resolve during bring-up).** Driving 24 tiles /
-384×128 exceeds one RP2350's comfortable envelope: the packed frame is ~192 KB
-(3× the current 64 KB), and double-buffered ~384 KB against the 520 KB SRAM is
-borderline once code/stack/DMA are counted. Two paths, decided as the wall comes
-up (see the FPGA-translator memory + the item-3 "GPU pack pass" note):
-- **Two RP2350s on the Pi 5** — split the wall (e.g. one chip per 2-chain half),
-  each with its own link + packer. Halves per-chip framebuffer, reuses the whole
-  existing firmware/packer stack. Needs the packer/link split per chip.
-- **FPGA translator** (ULX3S / ECP5, HDMI→HUB75) — the escape hatch if the
-  per-chip PIO/RAM math stops closing as the wall grows further.
+**Small win available:** the framebuffers land in `.data`, not `.bss` — the
+non-zero `delays[]` const-init in `DisplayMemory::new` drags the whole struct
+into flash, so the image is ~406 KB and boot memcpy's 384 KB. Zero-init `delays`
+and fill it at runtime in `Display::new` (`set_oe_gain` already overwrites it
+immediately) ⇒ ~14 KB image, much faster flash-iterate on the bench.

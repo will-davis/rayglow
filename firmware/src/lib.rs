@@ -19,11 +19,20 @@
 //!
 //! ### Two-chain geometry
 //!
-//! Both chains are 1:16-scan `H`-tall strips that latch together, so the
-//! drawable wall is **`W` × `2H`**: chain A is the top `H` rows, chain B the
-//! bottom `H`. A single 64×32 panel per chain → a 64×64 wall; four daisy-chained
-//! per chain → the full 256×64. A single-chain setup is the degenerate case:
-//! draw only the top `H` rows and leave GP6–11 (chain B) idle.
+//! Both chains are 1:16-scan `H`-tall strips that latch together, so this engine
+//! drives **`W` × `2H`**: chain A is the top `H` rows, chain B the bottom `H`. A
+//! single 64×32 panel per chain → 64×64; twelve daisy-chained per chain → 768×64.
+//! A single-chain setup is the degenerate case: draw only the top `H` rows and
+//! leave GP6–11 (chain B) idle.
+//!
+//! **`W` × `2H` is the ELECTRICAL strip pair, not necessarily the picture.** A
+//! chain is one `H`-tall shift register however its panels are physically
+//! arranged, so a chain whose panels snake across two rows of a wall is still one
+//! long strip here. The RayGLow wall is 384×128 (6×4 panels) driven as 768×64:
+//! the host folds picture → strips (`rayglow/render/hub75.py::to_chains`) before
+//! packing. **This engine knows nothing about the wall's shape** — it just clocks
+//! two `W`-wide strips, which is exactly why one chip can drive an arbitrary
+//! rectangle up to the SRAM ceiling (15 panels/chain; see `fb_cells`).
 //!
 //! ### Framebuffer cell (`u16`) bit layout — matches the GP0–11 `out pins` group
 //!
@@ -66,7 +75,27 @@ pub const CHAINS: usize = 2;
 ///
 /// One cell per (column, bit-plane, address-row); `H` is the per-chain height,
 /// so there are `H/2` address-rows under 1:16 scan. Both chains pack into the
-/// single cell, so the count is independent of `CHAINS`.
+/// single cell, so the count is independent of `CHAINS` — **adding a second chain
+/// costs no RAM** (and no refresh time; that is the whole lever, §4). Framebuffer
+/// RAM therefore scales with chain *width* alone.
+///
+/// ## The SRAM ceiling (measured, not estimated)
+///
+/// At `H=32, B=8` one buffer is `w*128` bytes = 16 KB per 64px panel, so
+/// double-buffered it is **32 KB per panel-per-chain**, independent of how many
+/// chains those panels sit on. Against `memory.x`'s 512 KB `RAM` pool (banks 8/9
+/// are separate 4 KB regions the linker does not use here), measured by linking
+/// `phase6-parallel --features two-chain` at rising widths:
+///
+/// | panels/chain | W | both FBs | RAM used | |
+/// |---|---|---|---|---|
+/// | 4 | 256 | 128 KB | 129 KB | wall v1 |
+/// | 12 | 768 | 384 KB | 385 KB | **wall v2, 6×4 — 75%** |
+/// | 15 | 960 | 480 KB | 481 KB | ceiling — 30 panels |
+/// | 16 | 1024 | 512 KB | — | overflows by 96 bytes |
+///
+/// Note the buffers currently land in `.data`, not `.bss`: `delays()` is non-zero
+/// at const-init, which drags the whole `DisplayMemory` into the flash image.
 #[doc(hidden)]
 pub const fn fb_cells(w: usize, h: usize, b: usize) -> usize {
     w * h / 2 * b

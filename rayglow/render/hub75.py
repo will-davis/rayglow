@@ -2,9 +2,14 @@
 
 This is the rpi5 half of the Pi->RP2350 link (both transports: the 4-lane
 parallel PIO bus and the SPI fallback carry this identical stream). It turns a
-(64, 256, 3) uint8 LINEAR RGB frame into the exact 64 KB byte stream the RP2350
+(64, CHAIN_WIDTH, 3) uint8 LINEAR RGB frame into the exact byte stream the RP2350
 firmware expects in its inactive framebuffer, so the firmware's PIO+DMA receive
 path drops it straight in with zero CPU touch-up.
+
+NOTE the input is the ELECTRICAL frame (chain A's strip stacked on chain B's),
+not the logical wall — `to_chains()` folds one into the other. They are the same
+array only when each chain covers a single panel row. The firmware knows nothing
+about the wall's shape; it just scans two CHAIN_WIDTH-wide strips.
 
 It is a 1:1 port of the firmware's `Display::render` (firmware/src/lib.rs) and
 gamma LUT (firmware/src/lut.rs), and is proven **byte-identical** to the firmware
@@ -12,13 +17,15 @@ by tools/verify.py (which builds a golden frame with the firmware's own `libm`).
 If you change the layout or gamma here, re-run that verifier and keep the
 firmware + this file in lockstep.
 
-Wire format (the "full display" = chain/row A over chain/row B):
-  - Wall   : WALL_WIDTH x WALL_HEIGHT (256 x 64), BITDEPTH planes, gamma PACK_GAMMA
-  - Input  : numpy uint8 (WALL_HEIGHT, WALL_WIDTH, 3), C-contiguous. With the
-             default LUT the input must be LINEAR RGB (the LUT applies gamma);
-             frames that the GPU resolve pass already gamma-corrected are packed
-             with LUT_IDENTITY instead — gamma is applied exactly once either way.
-  - Output : WALL_WIDTH*WALL_HEIGHT/2*BITDEPTH * 2 bytes (65536), u16 LE.
+Wire format (the "full display" = chain A's strip over chain B's):
+  - Strip  : CHAIN_WIDTH x 2*ROWS (768 x 64), BITDEPTH planes, gamma PACK_GAMMA
+  - Input  : numpy uint8 (2*ROWS, CHAIN_WIDTH, 3), C-contiguous — the output of
+             to_chains(). With the default LUT the input must be LINEAR RGB (the
+             LUT applies gamma); frames that the GPU resolve pass already
+             gamma-corrected are packed with LUT_IDENTITY instead — gamma is
+             applied exactly once either way.
+  - Output : CHAIN_WIDTH*ROWS/2*BITDEPTH * 2 bytes (196608 at 12 panels/chain;
+             65536 at 4), u16 LE.
 
 Cell index (matches firmware exactly):
     idx = addr_row*(W*B) + plane*W + (W-1-x)
@@ -37,26 +44,29 @@ import numpy as np
 
 from ..feed import config
 
-# Per-chain geometry. W/2H is the wall; H is one chain's height (ROWS).
-W = config.WALL_WIDTH           # 256 (two-chain wall width; single-chain infers per-frame)
+# Per-chain geometry. W is one chain's ELECTRICAL strip width (the firmware's W),
+# NOT the logical wall width — a chain that spans two panel rows is twice as wide
+# electrically as the wall is (768 vs 384). H is one chain's height (ROWS).
+W = config.CHAIN_WIDTH          # 768 (one chain's strip; pack() infers width per-frame)
 H = config.ROWS                 # 32 (per-chain height)
 B = config.BITDEPTH             # 8
 GAMMA = config.PACK_GAMMA       # 2.1
 # The firmware framebuffer is ALWAYS two chains tall (chain B is idle/black in
 # single-chain mode), so the packed frame is 2*H rows regardless of the logical
 # render height (config.WALL_HEIGHT). Decoupled from WALL_HEIGHT so a single-chain
-# rig can render a shorter wall (e.g. one 256x32 panel row, PARALLEL_CHAINS=1)
-# without tripping a two-chain invariant.
+# rig can render a shorter wall without tripping a two-chain invariant.
 WALL_H = 2 * H                  # 64 — packed-frame height (both chains)
 
-FB_CELLS = W * H // 2 * B       # 32768 u16 (two-chain reference; pack sizes per-frame)
-FRAME_BYTES = FB_CELLS * 2      # 65536
+FB_CELLS = W * H // 2 * B       # 98304 u16 (two-chain reference; pack sizes per-frame)
+FRAME_BYTES = FB_CELLS * 2      # 196608 (192 KB at 12 panels/chain; 64 KB at 4)
 
-# Two-chain rigs feed the renderer's frame straight to pack(), so the render must
-# BE the full wall. Single-chain rigs go through to_single_chain(), which always
-# emits a 2*H-tall frame, so there WALL_HEIGHT is just the logical render height.
+# The two-chain u16 engine is hardwired to exactly 2 chains (12 RGB bits over
+# GP0-11 — see firmware/src/lib.rs), so the packed frame is always 2*ROWS tall.
+# The logical wall can be taller than that (PANEL_ROWS > PARALLEL_CHAINS): that is
+# what to_chains() folds away, which is why this is no longer a WALL_HEIGHT check.
 if not config.SINGLE_CHAIN:
-    assert config.WALL_HEIGHT == WALL_H, "two-chain WALL_HEIGHT must equal 2*ROWS"
+    assert config.PARALLEL_CHAINS * H == WALL_H, \
+        "the two-chain firmware engine drives exactly PARALLEL_CHAINS=2 chains"
 
 
 def build_gamma_lut() -> np.ndarray:
@@ -177,45 +187,101 @@ def pack_single(frame: np.ndarray, lut: np.ndarray = _LUT) -> bytes:
     return fb3d.reshape(-1).tobytes()           # u8, contiguous
 
 
-def to_single_chain(frame: np.ndarray) -> np.ndarray:
-    """Fold the logical wall into the single-chain electrical strip (firmware
-    `phase-experimental`, W=512).
+def _fold(frame: np.ndarray, order, rot) -> np.ndarray:
+    """Lay the logical wall's panels out into one strip per chain.
 
-    All CHAIN*PARALLEL_CHAINS panels run on ONE daisy-chain (the spare Adafruit
-    HAT, single output). Electrically that is a (ROWS, COLS*N) strip on one chain
-    (N = len(CHAIN_ORDER)). Panels are laid into the strip in `config.CHAIN_ORDER`
-    and rows listed in `config.ROW_ROTATE_180` are rotated 180deg for the
-    serpentine U-turn (top row right->left, U-turn, bottom row left->right with
-    that row's panels physically inverted).
+    Shared core of `to_chains` (two-chain u16 rig) and `to_single_chain` (the
+    one-chain u8 fallback) — the fold is the same operation either way; only the
+    chain count and the packer that consumes it differ.
 
-    Input : (render_h, render_w, 3) uint8 — the logical wall, ≥ the panel-grid
-            extent CHAIN_ORDER references (post mount-orientation flips).
-    Output: (ROWS, COLS*N, 3) uint8 — ONE chain tall (the u8 engine has no chain
-            B); feed straight to `pack_single`. Width = N panels × COLS.
-
-    The exact order/rotation depend on which panel the HAT plugs into and the
-    cabling; confirm with `python -m rayglow.spi_test` (the orientation pattern).
+    `order[c][s]` = the (panel_row, panel_col) sitting at strip position `s` of
+    chain `c`; panel rows flagged in `rot` are rotated 180deg (the serpentine
+    U-turn inverts them). Output stacks the chains vertically — chain 0 on top —
+    which is exactly the (2*ROWS, chain_width, 3) frame `pack()` expects, and the
+    (ROWS, strip_width, 3) one `pack_single()` expects when there is one chain.
     """
     ph, pw = config.ROWS, config.COLS              # 32, 64 (panel height/width)
-    order = config.CHAIN_ORDER
-    rot = config.ROW_ROTATE_180
-    # CHAIN_ORDER must fit inside the rendered frame (and have a rotate flag
-    # for every panel row it references) — catch a config mismatch with a clear
+    # The order must fit inside the rendered frame (and have a rotate flag for
+    # every panel row it references) — catch a config mismatch with a clear
     # message instead of a numpy broadcast error.
-    need_rows = max(pr for pr, _ in order) + 1
-    need_cols = max(pc for _, pc in order) + 1
+    flat = [p for strip in order for p in strip]
+    need_rows = max(pr for pr, _ in flat) + 1
+    need_cols = max(pc for _, pc in flat) + 1
     if frame.shape[0] < need_rows * ph or frame.shape[1] < need_cols * pw:
         raise ValueError(
             f"CHAIN_ORDER spans a {need_cols*pw}x{need_rows*ph} panel grid but "
-            f"the render is {frame.shape[1]}x{frame.shape[0]} — match WALL_HEIGHT/"
-            f"WALL_WIDTH (PARALLEL_CHAINS/CHAIN) to the panels you actually chained"
+            f"the render is {frame.shape[1]}x{frame.shape[0]} — match PANEL_COLS/"
+            f"PANEL_ROWS to the panels you actually chained"
         )
     if len(rot) < need_rows:
         raise ValueError(f"ROW_ROTATE_180 needs >= {need_rows} entries")
-    elec = np.zeros((ph, len(order) * pw, 3), dtype=frame.dtype)   # one chain tall
-    for s, (prow, pcol) in enumerate(order):
-        block = frame[prow * ph:(prow + 1) * ph, pcol * pw:(pcol + 1) * pw]
-        if rot[prow]:
-            block = block[::-1, ::-1]              # 180deg = H flip + V flip
-        elec[:, s * pw:(s + 1) * pw] = block
+    n = len(order[0])
+    if any(len(s) != n for s in order):
+        raise ValueError("every chain must carry the same number of panels")
+
+    elec = np.zeros((len(order) * ph, n * pw, 3), dtype=frame.dtype)
+    for c, strip in enumerate(order):
+        for s, (prow, pcol) in enumerate(strip):
+            block = frame[prow * ph:(prow + 1) * ph, pcol * pw:(pcol + 1) * pw]
+            if rot[prow]:
+                block = block[::-1, ::-1]          # 180deg = H flip + V flip
+            elec[c * ph:(c + 1) * ph, s * pw:(s + 1) * pw] = block
     return np.ascontiguousarray(elec)
+
+
+# Is the configured fold a no-op (each chain covers exactly one panel row, laid
+# left-to-right, unrotated)? That is the v1 wall and the staged 6x2 step, where
+# the logical wall IS the electrical frame. Precomputed so to_chains() can hand
+# the frame straight back instead of memcpy'ing it into an identical array.
+_FOLD_IS_IDENTITY = (
+    not config.SINGLE_CHAIN
+    and not any(config.ROW_ROTATE_180)
+    and config.CHAIN_ORDER == [[(c, x) for x in range(config.PANEL_COLS)]
+                               for c in range(config.PARALLEL_CHAINS)]
+)
+
+
+def to_chains(frame: np.ndarray) -> np.ndarray:
+    """Fold the logical wall into the TWO chains' electrical strips.
+
+    A HUB75 chain is electrically one ROWS-tall strip no matter how many panels
+    hang off it, so a chain spanning two panel rows is serpentined: across the
+    first row, U-turn, back along the second. This converts the logical picture
+    into what the firmware actually scans out.
+
+    Input : (WALL_HEIGHT, WALL_WIDTH, 3) uint8 — the logical wall (384x128).
+    Output: (2*ROWS, CHAIN_WIDTH, 3) uint8 — chain A's 768-wide strip stacked on
+            chain B's; feed straight to `pack()`, which infers the width.
+
+    When each chain covers ONE panel row (PANEL_ROWS_PER_CHAIN == 1, i.e. the v1
+    wall and the staged 6x2 step) this is the IDENTITY — same array, unchanged —
+    so the no-fold rigs are bit-for-bit unaffected. `tools/fold_check.py` pins
+    that, plus losslessness for the folded case.
+
+    The order/rotation depend on which panel the HAT plugs into and the cabling;
+    confirm with `python -m rayglow.spi_test` (the corner-marker pattern).
+    """
+    if _FOLD_IS_IDENTITY:
+        return frame
+    return _fold(frame, config.CHAIN_ORDER, config.ROW_ROTATE_180)
+
+
+def to_single_chain(frame: np.ndarray) -> np.ndarray:
+    """Fold the logical wall into the ONE-chain electrical strip (the u8 engine,
+    firmware `phase-experimental` / default `phase6-parallel`).
+
+    All PANEL_COLS*PANEL_ROWS panels run on ONE daisy-chain (the spare Adafruit
+    HAT, single output). Electrically that is a (ROWS, COLS*N) strip on chain A
+    (chain B unused). Requires `config.SINGLE_CHAIN = True`, which is what makes
+    `config.CHAIN_ORDER` a single strip covering every panel row.
+
+    Input : (render_h, render_w, 3) uint8 — the logical wall.
+    Output: (ROWS, COLS*N, 3) uint8 — ONE chain tall (the u8 engine has no chain
+            B); feed straight to `pack_single`. Width = N panels × COLS.
+    """
+    if len(config.CHAIN_ORDER) != 1:
+        raise ValueError(
+            f"to_single_chain needs a 1-chain CHAIN_ORDER, got "
+            f"{len(config.CHAIN_ORDER)} — set config.SINGLE_CHAIN = True"
+        )
+    return _fold(frame, config.CHAIN_ORDER, config.ROW_ROTATE_180)

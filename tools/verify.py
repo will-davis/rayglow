@@ -56,8 +56,12 @@ def main() -> int:
     print(f"  gamma LUT: {len(py_lut)} entries identical ✓")
 
     # 2. load the exact input the golden used
+    # Width comes from the GOLDEN's own W (golden-frame/src/main.rs pins 256), not
+    # from the wall config: pack() is width-parametric, so this contract holds at
+    # any chain width and must not break when the wall is re-geometried.
     raw_in = np.fromfile(GOLDEN / "golden_input.bin", dtype=np.uint8)
-    frame = raw_in.reshape(fp.WALL_H, fp.W, 3)
+    w = len(raw_in) // (fp.WALL_H * 3)
+    frame = raw_in.reshape(fp.WALL_H, w, 3)
 
     # 3. pack and compare
     py_frame = fp.pack(frame)

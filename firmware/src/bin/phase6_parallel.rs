@@ -95,22 +95,39 @@ pub static PICOTOOL_ENTRIES: [hal::binary_info::EntryAddr; 3] = [
 
 const XTAL_FREQ_HZ: u32 = 12_000_000;
 
-// A/B KNOB — panels daisy-chained on the single chain. W = 64 * this.
-//   8 = full wall   (512 wide, 64 KB frame)   (u8 cells: fb_cells(512,32,8))
-//   4 = one panel row (256 wide, 32 KB frame)  ← for fps/SI A/B testing
-// MUST match the Pi's `len(CHAIN_ORDER)` (config.py): both sides derive the
+// GEOMETRY KNOB — panels daisy-chained on ONE chain. W = 64 * this. A chain is
+// electrically one 32-row strip however the panels are physically arranged, so a
+// chain that snakes across two panel rows counts BOTH here: the 6x4 wall is 24
+// tiles = 12 per chain = W 768, and the Pi's hub75.to_chains() does the folding.
+//   12 = wall v2, 6x4  (768 wide, 192 KB frame, 75% of SRAM)  ← production
+//    6 = wall v2 staged 6x2 (384 wide, 96 KB frame)  ← chain-length SI test
+//    4 = wall v1, 4x2   (256 wide, 64 KB frame)
+// MUST match the Pi's `config.CHAIN` (feed/config.py): both sides derive the
 // frame byte-count from it, and the handshake is a FIXED-size contract (the RX
-// DMA waits for exactly FRAME_BYTES) — a mismatch desyncs the link. Reflash to
-// change (W is a compile-time const generic). Chain A only (GP0–5); B idle/black.
-const PANELS_IN_CHAIN: usize = 4;
+// DMA waits for exactly FRAME_BYTES) — a mismatch desyncs the link with no error.
+// `uv run --with numpy tools/fold_check.py` prints the value the Pi expects.
+// Reflash to change (W is a compile-time const generic).
+//
+// SRAM ceiling: the two u16 framebuffers are W*H/2*B*2 bytes EACH, so RAM scales
+// with chain width — 32 KB per panel-per-chain, double-buffered. Measured by
+// linking this bin at rising widths against memory.x's 512 KB RAM: 15/chain (30
+// panels) is the last that links; 16 overflows by 96 bytes. 12 fits at 385 KB.
+const PANELS_IN_CHAIN: usize = 12;
 const W: usize = 64 * PANELS_IN_CHAIN;
 const H: usize = 32;
 const B: usize = 8;
-// HUB75 pixel clock = sys_clk / (2*div), sys_clk = 150 MHz. Unchanged from the
-// single-chain bring-up; tune independently of the (faster) ingest clock.
+// HUB75 pixel clock = sys_clk / (2*div), sys_clk = 150 MHz. If a 12-deep chain
+// glitches (only 4 was ever validated for SI — §11.7), raise the divisor: div 4
+// (18.8 MHz) still refreshes at ~153 Hz with OE_GAIN 128. Tune independently of
+// the (faster) ingest clock.
 const DATA_CLK_DIV: (u16, u8) = (3, 0); // ~25 MHz pixel clock (150/(2*3))
-// Brightness gain (Phase 4 §set_oe_gain) — carried from phase_experimental.
-const OE_GAIN: u32 = 64;
+// Brightness gain (Phase 4 §set_oe_gain). Tripling the chain width triples the
+// per-plane pixel-shift time, which dilutes the LED duty cycle — at the v1 gain of
+// 64 the 768-wide wall would sit at 39% duty vs v1's 72%, i.e. visibly dimmer.
+// Gain 192 restores 72% duty (identical brightness AND average LED current to v1)
+// by spending refresh: ~430 Hz -> ~143 Hz, still far above flicker. Binary plane
+// ratios are untouched, so color is unaffected.
+const OE_GAIN: u32 = 192;
 
 // CHAIN MODE — selected by the `two-chain` cargo feature (see the bin's section in
 // Cargo.toml). Default (no feature) = single-chain: u8 cells, chain A only, W×H

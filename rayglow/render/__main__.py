@@ -573,7 +573,7 @@ def run_wall(toy, watchers, feed, args, player, cmd_queue, use_pbo=False):
     flowing so a resume picks up live.
     """
     from .hub75 import (LUT_IDENTITY, build_gamma_lut, pack, pack_single,
-                        to_single_chain)
+                        to_chains, to_single_chain)
 
     legacy = args.readback == "legacy"
     pack_lut = build_gamma_lut() if legacy else LUT_IDENTITY
@@ -585,7 +585,7 @@ def run_wall(toy, watchers, feed, args, player, cmd_queue, use_pbo=False):
     if config.SINGLE_CHAIN:
         pack_single(to_single_chain(warm), pack_lut)
     else:
-        pack(warm, pack_lut)
+        pack(to_chains(warm), pack_lut)
 
     # Transport: the 4-lane RP1-PIO parallel bus (default) or the 1-lane SPI
     # fallback. Both expose send(bytes)/close(); the byte stream is identical.
@@ -669,10 +669,11 @@ def run_wall(toy, watchers, feed, args, player, cmd_queue, use_pbo=False):
                 if config.FLIP_H:
                     buf = buf[:, ::-1]
                 buf = np.ascontiguousarray(buf)
-            # Single-chain rig: fold the logical wall into the 512-wide serpentine
-            # strip (chain A) before packing. pack() infers the wider frame.
-            if config.SINGLE_CHAIN:
-                buf = to_single_chain(buf)
+            # Fold the logical wall into the chains' electrical strips: a chain
+            # spanning 2 panel rows is a serpentine, so the 384x128 wall becomes
+            # two 768-wide strips. Identity (a no-op view) when each chain covers
+            # one panel row, so no-fold rigs pay nothing. pack() infers the width.
+            buf = to_single_chain(buf) if config.SINGLE_CHAIN else to_chains(buf)
             tb = time.perf_counter()
             payload = (pack_single(buf, pack_lut) if config.SINGLE_CHAIN
                        else pack(buf, pack_lut))

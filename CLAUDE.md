@@ -7,8 +7,9 @@ this repository.
 
 RayGLow is a three-stage audio-reactive LED-wall pipeline: **desktop** (audio → feature
 packets) → **Raspberry Pi 5** (Shadertoy GLSL → packed frames) → **RP2350** (zero-CPU
-PIO+DMA HUB75 scan-out) → a 256×64 panel wall. **Read `README.md` first** — it has the
-pipeline diagram and the repo map. The pieces:
+PIO+DMA HUB75 scan-out) → a 384×128 panel wall (6×4 of 64×32 tiles; wall v1 was
+256×64). **Read `README.md` first** — it has the pipeline diagram and the repo map.
+The pieces:
 
 - **`sender/`** — the desktop daemon (`sender.py`): captures audio, sends feature
   packets. Standalone uv project (numpy + sounddevice). Has its own `README.md` +
@@ -40,6 +41,8 @@ pipeline diagram and the repo map. The pieces:
   `THIRD-PARTY.md`.
 - **`hardware/`** — the custom level-shifting HAT (KiCad project, Gerbers, net/pinout spec).
 - **`tools/`** — `verify.py`: proves `render/hub75.py` is byte-identical to the firmware.
+  `fold_check.py`: proves the serpentine fold (`hub75.to_chains`) + the geometry/SRAM
+  contract from the desk, and prints the firmware `PANELS_IN_CHAIN` the Pi expects.
   `feed_check.py`: proves the feature-packet contract (sender ⇄ receiver ⇄ fake_sender);
   its `--live` mode pretty-prints real packets for sine-tone band verification.
   `rayglow_ctl.py`: the control-plane client (`push`/`load`/media controls);
@@ -75,12 +78,27 @@ them.
     (linear band thirds, equalize-on legacy path, NO equalize on the v3 bands, the
     deliberately inconsistent `analyze_sub`, deferred `sounddevice` import) is in
     `sender/CLAUDE.md`.
-  - *The link frame* — `rayglow/render/hub75.py` packs a 64 KB bit-plane stream that the
+  - *The link frame* — `rayglow/render/hub75.py` packs a 192 KB bit-plane stream that the
     firmware's RX DMA drops into its framebuffer with zero touch-up (the same bytes over
     the parallel bus or SPI; the layout is defined by `Display::render` in
     `firmware/src/lib.rs`). The packer and the firmware are a **1:1 port of each other**;
     change one and you change both. `tools/verify.py` builds a Rust golden frame and
-    asserts they're byte-identical — run it after any layout/gamma change.
+    asserts they're byte-identical — run it after any layout/gamma change. The frame is a
+    **fixed-size contract**: the Pi's `config.CHAIN` must equal the firmware's
+    `PANELS_IN_CHAIN` (`phase6_parallel.rs`) or the link desyncs *silently* —
+    `tools/fold_check.py` prints the value the Pi expects.
+- **Three widths, and conflating them is the classic bug.** `WALL_WIDTH` (384) is the
+  logical picture; `CHAIN_WIDTH` (768) is one chain's electrical strip and IS the
+  firmware's `W`; `WALL_HEIGHT` (128) is the picture's height. A HUB75 chain is
+  electrically one 32-row strip however many panels hang off it, so a chain spanning two
+  panel rows is **serpentined** — `render/hub75.to_chains` folds the 384×128 wall into
+  two 768×32 strips (stacked = the 64-row frame `pack()` eats). **The firmware knows
+  nothing about the wall's shape.** When each chain covers one panel row
+  (`PANEL_ROWS_PER_CHAIN == 1` — wall v1, and the staged 6×2 step) the fold is the
+  identity and returns the frame untouched. `tools/fold_check.py` proves the identity at
+  the packed-byte level plus losslessness/coverage/cable-adjacency — run it after any
+  geometry change. Which *end* of a row a strip starts at is physical (where the HAT
+  plugs in) and can only be confirmed on the wall with `python -m rayglow.spi_test`.
 - **Gamma is applied exactly once, and where depends on the readback mode.**
   `config.PACK_GAMMA` (2.1, mirrors firmware `lut.rs`; the firmware never touches
   streamed frames) is baked into the GPU resolve pass by default, so `run_wall` feeds
@@ -129,6 +147,8 @@ values (and the mutagen session details) live in the gitignored `LOCAL-SETUP.md`
   tools/feed_check.py` (`--live` to watch real packets, e.g. under sine tones).
 - Control-plane wire contract (client ⇄ server framing, no hardware): `uv run
   tools/control_check.py`.
+- Serpentine fold + the geometry/SRAM contract (no hardware): `uv run --with numpy
+  tools/fold_check.py` — also prints the `PANELS_IN_CHAIN` the firmware needs.
 - Beat tracker: `cd sender && uv run beat.py` → click-track lock table.
 - Packer ≡ firmware: `uv run --with numpy tools/verify.py` (needs `cargo`).
 - Firmware builds: `cd firmware && cargo build` (nightly + `thumbv8m.main-none-eabihf`).

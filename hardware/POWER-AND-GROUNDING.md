@@ -110,9 +110,16 @@ star-ground rules above:
 - **Bond both PSU (−) terminals at ONE star point** (a single heavy strap) so
   the two halves and the HAT/SBC logic GND share one reference. Don't let panel
   return current find a second path through the logic ground.
-- **Split the wall by supply** (e.g. 12 panels each); keep each rail's fat +5 V
-  and return copper to its own panels. Do **not** cross-feed +5 V between the two
-  rails — parallel supplies fight on load-share.
+- **Split the wall by supply on the horizontal midline** — 12 panels each, top
+  half on one rail, bottom half on the other. That is deliberately the *same*
+  boundary as the HUB75 chain A / chain B split (chain A = the top two panel
+  rows, chain B = the bottom two — see `config.serpentine`), so a chain's data
+  and its panels' return current share one supply's reference. A split that cut
+  across the chains would put a chain's HUB75 signals and their ground return on
+  two different rails, referencing the data to a ground that moves independently
+  of it — exactly the bounce failure diagnosed above, reintroduced by wiring.
+  Keep each rail's fat +5 V and return copper to its own panels. Do **not**
+  cross-feed +5 V between the two rails — parallel supplies fight on load-share.
 - The SBC/HAT logic rail rides **one** supply's (−) reference (or a small
   dedicated supply), never floating between the two.
 

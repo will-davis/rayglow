@@ -2,7 +2,7 @@
 name = "rp2350-rgb-driver"
 version = "0.1.0"
 edition = "2021"
-description = "Zero-CPU HUB75 RGB-matrix scan-out engine for the RP2350 (PIO + DMA). Drives 8x 64x32 panels (256x64) over two parallel chains."
+description = "Zero-CPU HUB75 RGB-matrix scan-out engine for the RP2350 (PIO + DMA). Drives 24x 64x32 panels (384x128) over two parallel chains of 12."
 license = "MIT"
 
 # Phase binaries. Each milestone in PROJECT-PLAN.md §8 is an independently

@@ -14,8 +14,8 @@ desktop (optional)                 Raspberry Pi 5                         RP2350
 ┌────────────────────────┐         ┌────────────────────────────┐         ┌───────────────────────┐
 │ music ▶ sink monitor   │  UDP    │ feed.receiver (latest-win) │  4-lane │ phase6: PIO+DMA RX    │
 │ sender.py: FFT ▶ bands │ ──────▶ │ render: GLSL ▶ pack        │   bus   │ zero-CPU scan-out     │
-│ + flywheels/beat/key   │  :5005  │ (hub75.pack, LINEAR RGB)   │ ──────▶ │ ▶ HUB75 ▶ 256×64 wall │
-│ ▶ 2996-B v3 @ ~60 Hz   │ ~180KB/s│ headless EGL + GLES3       │  64 KB  │ (2 chains × 4 panels) │
+│ + flywheels/beat/key   │  :5005  │ (to_chains ▶ hub75.pack)   │ ──────▶ │ ▶ HUB75 ▶ 384×128 wall│
+│ ▶ 2996-B v3 @ ~60 Hz   │ ~180KB/s│ headless EGL + GLES3       │ 192 KB  │ (2 chains × 12 panels)│
 └────────────────────────┘         └────────────────────────────┘         └───────────────────────┘
         point $RAYGLOW_HOST ──────────────▶ your Pi
 ```
@@ -45,7 +45,7 @@ gets used the way UDP wants to be used.
 Bit-banging HUB75 from a Linux SoC fights the scheduler — it needs a dedicated RT core
 and still jitters (the Pi 5's RP1 southbridge made it worse). The RP2350b runs the refresh
 loop entirely in **3 PIO state machines + 4 self-chaining DMA channels**, with the CPU
-never touching the pixel path. The Pi renders at whatever rate it likes and ships 64 KB
+never touching the pixel path. The Pi renders at whatever rate it likes and ships 192 KB
 frames over the link — already gamma-corrected on the Pi (the GPU resolve pass bakes
 the firmware `lut.rs` CIE curve into each frame; `--readback legacy` instead applies
 the packer's bit-exact LUT replica to a LINEAR readback); the RP2350b holds a
@@ -54,7 +54,8 @@ rock-steady, flicker-free refresh.
 ## Why a parallel bus, not SPI
 
 The link was originally 1-lane SPI, and SPI still works as the proven fallback
-(`--transport spi`). But the 64 KB frame takes ~13 ms at 40 MHz SPI — long enough to sit
+(`--transport spi`). But a frame takes ~13 ms at 40 MHz SPI even at the v1 wall's 64 KB —
+~39 ms at the v2 wall's 192 KB — long enough to sit squarely
 on the critical path. A **4-lane source-synchronous parallel bus**, clocked out by the
 Pi 5's RP1 PIO block, drops that to ~2 ms (clkdiv 3; ~1.3 ms at clkdiv 2). Only the wire
 changes: the byte stream is identical to the SPI path (same `hub75.py` packer output,
@@ -78,10 +79,10 @@ KiCad project, and fab Gerbers are in [`hardware/`](hardware/).
 | `rayglow/feed/` | the audio-feature feed: packet `receiver`, `FeatureState`, and the rig `config` (geometry/network/gamma). Shared, dependency-free. |
 | `rayglow/render/` | **the live renderer** — headless EGL + GLES3, multipass pipeline, iChannel textures (`audio`, `milk`, noise, images), hot reload, a TCP **control plane** (`control.py`: push/switch shaders + media controls), the GPU resolve pass + zero-copy dma-heap readback (`output.py`, `dmabuf.py`), the frame packer (`hub75.py`) + link backends (`spi_out.py`, `pio_out.py` / `piobridge/`), and `presets/*.glsl`. |
 | `rayglow/fake_sender.py` | music-free test harness; emits the same packet struct with synthesized features. |
-| `rayglow/spi_test.py` | static SPI test pattern (no GL) — isolates the link/firmware from the renderer. |
+| `rayglow/spi_test.py` | static test pattern (no GL) — isolates the link/firmware/cabling from the renderer. Per-panel ID markers confirm the serpentine fold; runs over either transport. |
 | `firmware/` | **RP2350b Rust firmware** — zero-CPU PIO+DMA HUB75 scan-out, brought up in verifiable phases. [firmware/README.md](firmware/README.md). |
 | `hardware/` | **custom HAT** — KiCad project, Gerbers, and the locked net/pinout spec. [hardware/README.md](hardware/README.md). |
-| `tools/` | `verify.py` — proves the Python packer (`render/hub75.py`) is byte-identical to the firmware via a Rust golden frame. `dmabuf_probe.py` — the readback benchmark. |
+| `tools/` | `verify.py` — proves the Python packer (`render/hub75.py`) is byte-identical to the firmware via a Rust golden frame. `fold_check.py` — proves the serpentine fold + the geometry/SRAM contract from the desk. `dmabuf_probe.py` — the readback benchmark. |
 | `ROADMAP.md` | queued workstreams — the living handoff doc between working sessions. |
 | `docs/design-history/` | the original project record (MilkDrop reverse-engineering, the RP2350 plan, the build-history brain-dump). Superseded by the docs above where they disagree. |
 
@@ -132,7 +133,8 @@ under `~`).
   against the RP1 `piolib` first — see
   [`rayglow/render/piobridge/README.md`](rayglow/render/piobridge/README.md).
 - **SPI fallback (`--transport spi`):** enable SPI and make sure
-  `/sys/module/spidev/parameters/bufsiz >= 65536` so a 64 KB frame goes in one transfer.
+  `/sys/module/spidev/parameters/bufsiz >= 196608` so the v2 wall's 192 KB frame goes in
+  one transfer (the default 4096 is far too small; size it to `hub75.FRAME_BYTES`).
 
 Per-machine addresses/paths: see [`LOCAL-SETUP.example.md`](LOCAL-SETUP.example.md).
 
@@ -150,8 +152,9 @@ control plane (`tools/rayglow_ctl.py push`, or the `tools/nvim-rayglow.lua` save
 ships edits straight to the running renderer in <100ms — skipping the file-sync lag —
 and adds media controls (next/prev/play/pause/loop) plus live per-shader supersample
 scale (`// rayglow: scale=N` directive or `rayglow-ctl scale`). The Phase 6 4-lane parallel
-bus is the production transport (hardware-verified on the custom HAT, driving the full
-256×64 wall); the Phase 5 SPI link remains the proven fallback. A microphone input path
+bus is the production transport (hardware-verified on the custom HAT driving the 256×64 v1
+wall; the 384×128 v2 wall is in bring-up — host + firmware ship, cabling/SI pending, see
+ROADMAP §5); the Phase 5 SPI link remains the proven fallback. A microphone input path
 exists (`sender/esp32-mic/` + `sender/espnow-dongle/`). Next: pulling config into a
 user-editable yaml so the project runs on someone else's wall/network by editing one
 file.
