@@ -737,7 +737,7 @@ def run_kms(toy, watchers, feed, args, player, cmd_queue, use_pbo=False):
     """
     from .kms_out import KmsOut
 
-    out = KmsOut()
+    out = KmsOut(args.fbdev)
     print(f"output: {out.desc}")
     # Warm the render path before blitting (mirrors run_wall's warm-up).
     if feed:
@@ -838,6 +838,10 @@ def main():
                          "over --transport) or 'kms' (blit raw RGB to the Pi's DPI "
                          "framebuffer for the ECP5 FPGA translator; FPGA owns gamma + "
                          "HUB75 fold, so resolve gamma is forced to 1.0)")
+    ap.add_argument("--fbdev", default="/dev/fb0",
+                    help="(--output kms) framebuffer device to blit into. The DPI fb may "
+                         "not be fb0 once vc4-kms-v3d adds an HDMI fb — pick the one whose "
+                         "width matches the wall (ls /sys/class/graphics/fb*/virtual_size)")
     ap.add_argument("--transport", choices=("spi", "pio"), default="pio",
                     help="link to the rp2350b: 'pio' (4-lane RP1-PIO parallel "
                          "bus, default — needs phase6 firmware + "
