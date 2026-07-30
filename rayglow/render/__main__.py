@@ -737,7 +737,20 @@ def run_kms(toy, watchers, feed, args, player, cmd_queue, use_pbo=False):
     """
     from .kms_out import KmsOut
 
-    out = KmsOut(args.fbdev)
+    # Prefer direct DRM page-flips (hardware tear-free, event-paced); the fbdev mmap
+    # is a kernel SHADOW buffer whose deferred page-chunk copies race the scanout —
+    # the source of the fine-banded tearing. Fallback keeps dev boxes working.
+    out = None
+    if args.kms_backend in ("drm", "auto"):
+        try:
+            from .drm_out import DrmOut
+            out = DrmOut()
+        except OSError as e:
+            if args.kms_backend == "drm":
+                raise
+            print(f"drm backend unavailable ({e}); falling back to fbdev")
+    if out is None:
+        out = KmsOut(args.fbdev)
     print(f"output: {out.desc}")
     # Warm the render path before blitting (mirrors run_wall's warm-up).
     if feed:
@@ -751,7 +764,7 @@ def run_kms(toy, watchers, feed, args, player, cmd_queue, use_pbo=False):
     fps_frames, fps_t = 0, t0
     switch_t = t0
     acc_render = acc_blit = 0.0
-    print("\n  fps  render  blit+vs")   # blit includes the vsync wait when paced
+    print("\n  fps  render  convert    wait   write  missed-vblanks")
     try:
         while True:
             now = time.perf_counter()
@@ -789,11 +802,17 @@ def run_kms(toy, watchers, feed, args, player, cmd_queue, use_pbo=False):
             if now - fps_t >= 5.0:
                 n = fps_frames
                 player.fps = n / (now - fps_t)
+                convert = acc_blit - out.acc_wait - out.acc_write
                 print(f"{n / (now - fps_t):5.1f} "
                       f"{acc_render / n * 1e3:6.1f}ms "
-                      f"{acc_blit / n * 1e3:5.1f}ms")
+                      f"{convert / n * 1e3:6.1f}ms "
+                      f"{out.acc_wait / n * 1e3:6.1f}ms "
+                      f"{out.acc_write / n * 1e3:6.2f}ms "
+                      f"{out.missed:4d}")
                 fps_frames, fps_t = 0, now
                 acc_render = acc_blit = 0.0
+                out.acc_wait = out.acc_write = 0.0
+                out.missed = 0
             sleep = frame_interval - (time.perf_counter() - now)
             if sleep > 0:
                 time.sleep(sleep)
@@ -839,9 +858,13 @@ def main():
                          "framebuffer for the ECP5 FPGA translator; FPGA owns gamma + "
                          "HUB75 fold, so resolve gamma is forced to 1.0)")
     ap.add_argument("--fbdev", default="/dev/fb0",
-                    help="(--output kms) framebuffer device to blit into. The DPI fb may "
-                         "not be fb0 once vc4-kms-v3d adds an HDMI fb — pick the one whose "
-                         "width matches the wall (ls /sys/class/graphics/fb*/virtual_size)")
+                    help="(--output kms, fbdev backend) framebuffer device to blit into. "
+                         "The DPI fb may not be fb0 once vc4-kms-v3d adds an HDMI fb — pick "
+                         "the one whose width matches the wall")
+    ap.add_argument("--kms-backend", choices=("auto", "drm", "fbdev"), default="auto",
+                    help="(--output kms) 'drm' = direct KMS page-flips (tear-free, needs "
+                         "DRM master); 'fbdev' = legacy shadow-fb blits; 'auto' tries drm "
+                         "then falls back")
     ap.add_argument("--transport", choices=("spi", "pio"), default="pio",
                     help="link to the rp2350b: 'pio' (4-lane RP1-PIO parallel "
                          "bus, default — needs phase6 firmware + "

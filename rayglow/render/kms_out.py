@@ -61,15 +61,22 @@ class _VBlank:
                 os.close(fd)
                 raise
             self.fd, self.card = fd, card
+            self._last_seq = None
             return
         raise OSError(f"no /dev/dri/card* shares a parent device with {fbdev}")
 
     def _ioctl(self, fd):
         buf = bytearray(struct.pack("IIqq", _DRM_VBLANK_RELATIVE, 1, 0, 0))
         fcntl.ioctl(fd, _DRM_IOCTL_WAIT_VBLANK, buf)
+        return struct.unpack("IIqq", buf)[1]        # reply.sequence (vblank counter)
 
     def wait(self):
-        self._ioctl(self.fd)
+        """Block until the next vblank; returns how many vblanks elapsed since the
+        previous wait (1 = perfect pacing; >1 = missed frames = visible stutter)."""
+        seq = self._ioctl(self.fd)
+        missed = 0 if self._last_seq is None else max(0, seq - self._last_seq - 1)
+        self._last_seq = seq
+        return missed
 
     def close(self):
         if self.fd is not None:
@@ -109,6 +116,8 @@ class KmsOut:
         self.desc = (f"KMS {fbdev} {self.fb_w}x{self.fb_h} {self.bpp}bpp "
                      f"stride={self.stride}")
         self._vbl = None
+        self.acc_wait = self.acc_write = 0.0
+        self.missed = 0
         if vsync:
             try:
                 self._vbl = _VBlank(fbdev)
@@ -133,20 +142,33 @@ class KmsOut:
 
     def blit(self, rgb):
         """Write a frame to the framebuffer's top-left. Clips to the fb if oversized.
-        With vsync, blocks until the next vertical blank first (tear-free, ~60 Hz)."""
-        if self._vbl is not None:
-            self._vbl.wait()
+
+        With vsync: the numpy->fb-native conversion happens BEFORE the vblank wait, so
+        the post-vblank critical section is one bare memory write (~100s of us) that
+        finishes inside blanking + the first few lines — the scanout beam never catches
+        a half-written frame. Timing accumulators (`acc_wait/acc_write/missed`) feed the
+        run loop's stats line.
+        """
+        import time
         h = min(rgb.shape[0], self.fb_h)
         w = min(rgb.shape[1], self.fb_w)
         fb = self._to_fb(np.ascontiguousarray(rgb[:h, :w]))
         rowbytes = w * self.Bpp
+        data = fb.tobytes()                  # all conversion done pre-wait
+
+        t0 = time.perf_counter()
+        if self._vbl is not None:
+            self.missed += self._vbl.wait()
+        t1 = time.perf_counter()
         if rowbytes == self.stride:          # full-width fast path: one contiguous write
-            self._mm[0:h * self.stride] = fb.tobytes()
+            self._mm[0:h * self.stride] = data
         else:
-            data = fb.tobytes()
             for y in range(h):
                 off = y * self.stride
                 self._mm[off:off + rowbytes] = data[y * rowbytes:(y + 1) * rowbytes]
+        t2 = time.perf_counter()
+        self.acc_wait += t1 - t0
+        self.acc_write += t2 - t1
 
     # Symmetry with the transport sinks (SpiOut/PioOut expose send/close); run_kms
     # calls blit() directly, but close() lets teardown be uniform.
