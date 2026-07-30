@@ -64,8 +64,11 @@ PACK_GAMMA = 2.1                       # CIE gamma the wall gets (mirrors firmwa
 # the firmware's scan convention, displays the image rotated 180deg from the
 # rendered frame. Flip both axes before packing to compensate. Confirmed with:
 #   python -m rayglow.spi_test --flipv --fliph
-FLIP_H = False                          # left<->right (HUB75 input side)
-FLIP_V = False                          # top<->bottom (panel mount vs scan order)
+FLIP_H = True                           # left<->right (HUB75 input side)
+FLIP_V = True                           # top<->bottom (panel mount vs scan order)
+# FPGA/DPI rig (2026-07-22): wall physically rotated 180deg (HUB75 fed L->R from the
+# front), so both axes flip. Baked into the GPU resolve pass -> zero latency, no hardware.
+# Verify with an ASYMMETRIC shader (will-voidrainbow has 4-quadrant symmetry, hides it).
 
 # ----------------------------------------------------------------------------
 # Single-chain serpentine fallback (firmware: phase-experimental). The whole

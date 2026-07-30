@@ -726,6 +726,102 @@ def run_wall(toy, watchers, feed, args, player, cmd_queue, use_pbo=False):
         pipe.close()
 
 
+def run_kms(toy, watchers, feed, args, player, cmd_queue, use_pbo=False):
+    """Render frames straight into the Pi's DPI framebuffer for the FPGA translator.
+
+    Same live loop as run_wall (control plane, --loop auto-advance, feed, pausable
+    per-shader clock) but the host does NO fold/pack/transport: it blits the resolved
+    (H, W, 3) frame to /dev/fb0 and the ECP5 FPGA does the HUB75 fold, gamma (its CIE
+    LUT) and BCM scan-out. Resolve gamma is 1.0 here (set in main), so the frame is
+    display-referred RGB — see kms_out.py and rayglow-fpga/INTERFACE-CONTRACT.md.
+    """
+    from .kms_out import KmsOut
+
+    # Prefer direct DRM page-flips (hardware tear-free, event-paced); the fbdev mmap
+    # is a kernel SHADOW buffer whose deferred page-chunk copies race the scanout —
+    # the source of the fine-banded tearing. Fallback keeps dev boxes working.
+    out = None
+    if args.kms_backend in ("drm", "auto"):
+        try:
+            from .drm_out import DrmOut
+            out = DrmOut()
+        except OSError as e:
+            if args.kms_backend == "drm":
+                raise
+            print(f"drm backend unavailable ({e}); falling back to fbdev")
+    if out is None:
+        out = KmsOut(args.fbdev)
+    print(f"output: {out.desc}")
+    # Warm the render path before blitting (mirrors run_wall's warm-up).
+    if feed:
+        feed.update(0.0, 1.0 / 60)
+    out.blit(toy.render(0.0, 1.0 / 60, 0))
+    pin_to_core(config.RENDER_CORE)
+
+    frame_interval = 1.0 / args.fps
+    t0 = time.perf_counter()
+    last = t0
+    fps_frames, fps_t = 0, t0
+    switch_t = t0
+    acc_render = acc_blit = 0.0
+    print("\n  fps  render  convert    wait   write  missed-vblanks")
+    try:
+        while True:
+            now = time.perf_counter()
+            if args.duration and now - t0 >= args.duration:
+                break
+            prev_toy = toy
+            toy, watchers = drain_commands(cmd_queue, toy, watchers, feed,
+                                           player, args, use_pbo)
+            if toy is not prev_toy:
+                switch_t = now
+            if (player.loop_interval and not player.repeat and not player.paused
+                    and len(player.playlist) > 1
+                    and now - switch_t >= player.loop_interval):
+                switch_t = now
+                nt, nw, _err = _advance(toy, feed, player, args, use_pbo, +1)
+                if nt is not None:
+                    toy, watchers = nt, nw
+                    print(f"loop: now showing {player.display_name}")
+            maybe_reload(toy, watchers)
+            if feed:
+                feed.update(now - t0, now - last)
+            ta = time.perf_counter()
+            shader_dt = 0.0 if player.paused else now - last
+            buf = toy.render(player.shader_time, shader_dt, player.shader_frame)
+            if not player.paused:
+                player.shader_time += now - last
+                player.shader_frame += 1
+            tb = time.perf_counter()
+            out.blit(buf)                 # raw RGB -> DPI framebuffer; FPGA does the rest
+            tc = time.perf_counter()
+            acc_render += tb - ta
+            acc_blit += tc - tb
+            last = now
+            fps_frames += 1
+            if now - fps_t >= 5.0:
+                n = fps_frames
+                player.fps = n / (now - fps_t)
+                convert = acc_blit - out.acc_wait - out.acc_write
+                print(f"{n / (now - fps_t):5.1f} "
+                      f"{acc_render / n * 1e3:6.1f}ms "
+                      f"{convert / n * 1e3:6.1f}ms "
+                      f"{out.acc_wait / n * 1e3:6.1f}ms "
+                      f"{out.acc_write / n * 1e3:6.2f}ms "
+                      f"{out.missed:4d}")
+                fps_frames, fps_t = 0, now
+                acc_render = acc_blit = 0.0
+                out.acc_wait = out.acc_write = 0.0
+                out.missed = 0
+            sleep = frame_interval - (time.perf_counter() - now)
+            if sleep > 0:
+                time.sleep(sleep)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        out.close()
+
+
 def main():
     ap = argparse.ArgumentParser(
         prog="shadertoy", description=__doc__,
@@ -756,6 +852,19 @@ def main():
                          "+1 frame latency). glread: force the fallback. "
                          "legacy: the original full-size glReadPixels + CPU "
                          "postprocess path")
+    ap.add_argument("--output", choices=("wall", "kms"), default="wall",
+                    help="frame sink: 'wall' (default — fold/pack/ship to the rp2350b "
+                         "over --transport) or 'kms' (blit raw RGB to the Pi's DPI "
+                         "framebuffer for the ECP5 FPGA translator; FPGA owns gamma + "
+                         "HUB75 fold, so resolve gamma is forced to 1.0)")
+    ap.add_argument("--fbdev", default="/dev/fb0",
+                    help="(--output kms, fbdev backend) framebuffer device to blit into. "
+                         "The DPI fb may not be fb0 once vc4-kms-v3d adds an HDMI fb — pick "
+                         "the one whose width matches the wall")
+    ap.add_argument("--kms-backend", choices=("auto", "drm", "fbdev"), default="auto",
+                    help="(--output kms) 'drm' = direct KMS page-flips (tear-free, needs "
+                         "DRM master); 'fbdev' = legacy shadow-fb blits; 'auto' tries drm "
+                         "then falls back")
     ap.add_argument("--transport", choices=("spi", "pio"), default="pio",
                     help="link to the rp2350b: 'pio' (4-lane RP1-PIO parallel "
                          "bus, default — needs phase6 firmware + "
@@ -852,6 +961,10 @@ def main():
     else:
         args.render_gamma = config.PACK_GAMMA
         args.resolve_flip = (config.FLIP_V, config.FLIP_H)
+    # KMS/DPI output: the FPGA applies gamma (its CIE LUT), so the host must NOT bake
+    # it in — send display-referred RGB. Orientation flips stay on the GPU as usual.
+    if args.output == "kms" and not dry:
+        args.render_gamma = 1.0
     toy, watchers, _ = build_shader(args, use_pbo, args.shader, fatal=True,
                                     scale_override=args.scale)
     assert toy is not None       # fatal=True exits on a compile error
@@ -895,7 +1008,8 @@ def main():
                   f"{args.control_port}: {e}", file=sys.stderr)
 
     try:
-        run_wall(toy, watchers, feed, args, player, cmd_queue, use_pbo=use_pbo)
+        loop = run_kms if args.output == "kms" else run_wall
+        loop(toy, watchers, feed, args, player, cmd_queue, use_pbo=use_pbo)
     finally:
         if server is not None:
             server.close()
