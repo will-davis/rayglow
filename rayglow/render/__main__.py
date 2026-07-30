@@ -751,7 +751,7 @@ def run_kms(toy, watchers, feed, args, player, cmd_queue, use_pbo=False):
     fps_frames, fps_t = 0, t0
     switch_t = t0
     acc_render = acc_blit = 0.0
-    print("\n  fps  render   blit")
+    print("\n  fps  render  blit+vs")   # blit includes the vsync wait when paced
     try:
         while True:
             now = time.perf_counter()

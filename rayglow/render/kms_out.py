@@ -14,8 +14,11 @@ Blit target is the top-left W×H of the framebuffer. The DPI mode is typically l
 than the rendered wall (the RP1 DPI driver clamps vactive to 480), so the rest of the
 framebuffer is left black and the FPGA crops to the wall region it drives.
 """
+import fcntl
+import glob
 import mmap
 import os
+import struct
 
 import numpy as np
 
@@ -27,10 +30,62 @@ def _sysfs_int(path, default):
         return default
 
 
-class KmsOut:
-    """Open /dev/fb0 and blit (H, W, 3) uint8 RGB frames to its top-left corner."""
+# union drm_wait_vblank is 24 bytes (request: u32 type, u32 seq, u64 signal;
+# reply: u32 type, u32 seq, s64 tval_sec, s64 tval_usec) -> _IOWR('d', 0x3a, 24).
+_DRM_IOCTL_WAIT_VBLANK = 0xC018643A
+_DRM_VBLANK_RELATIVE = 1
 
-    def __init__(self, fbdev="/dev/fb0"):
+
+class _VBlank:
+    """Wait for the display's vertical blank (DRM_IOCTL_WAIT_VBLANK).
+
+    Blitting right after vblank starts means the write completes during blanking +
+    the first few scanout lines — the scanout never reads a half-updated frame. This
+    is what makes the fbdev path tear-free without full DRM page-flipping. Finds the
+    DRM card backing the fbdev by matching their parent platform device in sysfs.
+    """
+
+    def __init__(self, fbdev):
+        fb_parent = os.path.realpath(
+            f"/sys/class/graphics/{os.path.basename(fbdev)}/device")
+        self.fd = None
+        for card in sorted(glob.glob("/dev/dri/card[0-9]*")):
+            parent = os.path.realpath(
+                f"/sys/class/drm/{os.path.basename(card)}/device")
+            if parent != fb_parent:
+                continue
+            fd = os.open(card, os.O_RDWR)
+            try:
+                self._ioctl(fd)             # probe: driver must support vblank waits
+            except OSError:
+                os.close(fd)
+                raise
+            self.fd, self.card = fd, card
+            return
+        raise OSError(f"no /dev/dri/card* shares a parent device with {fbdev}")
+
+    def _ioctl(self, fd):
+        buf = bytearray(struct.pack("IIqq", _DRM_VBLANK_RELATIVE, 1, 0, 0))
+        fcntl.ioctl(fd, _DRM_IOCTL_WAIT_VBLANK, buf)
+
+    def wait(self):
+        self._ioctl(self.fd)
+
+    def close(self):
+        if self.fd is not None:
+            os.close(self.fd)
+            self.fd = None
+
+
+class KmsOut:
+    """Open /dev/fb0 and blit (H, W, 3) uint8 RGB frames to its top-left corner.
+
+    vsync=True (default) paces every blit to the display's vertical blank, which
+    both eliminates tearing and locks the render loop to the DPI refresh (60 Hz).
+    Falls back to unpaced blits (with a note in `desc`) if the driver refuses.
+    """
+
+    def __init__(self, fbdev="/dev/fb0", vsync=True):
         base = "/sys/class/graphics/" + os.path.basename(fbdev)
         try:
             vw, vh = open(base + "/virtual_size").read().strip().split(",")
@@ -51,8 +106,15 @@ class KmsOut:
                 f"{fbdev}: permission denied — add the user to the 'video' group "
                 "(sudo usermod -aG video $USER; re-login) or run with privilege.")
         self._mm = mmap.mmap(self._fd, self.stride * self.fb_h)
-        self.desc = (f"KMS /dev/fb0 {self.fb_w}x{self.fb_h} {self.bpp}bpp "
+        self.desc = (f"KMS {fbdev} {self.fb_w}x{self.fb_h} {self.bpp}bpp "
                      f"stride={self.stride}")
+        self._vbl = None
+        if vsync:
+            try:
+                self._vbl = _VBlank(fbdev)
+                self.desc += f" +vsync ({self._vbl.card})"
+            except OSError as e:
+                self.desc += f" (vsync unavailable, unpaced: {e})"
 
     def _to_fb(self, rgb):
         """(H, W, 3) uint8 RGB -> framebuffer-native bytes, one row at a time later."""
@@ -70,7 +132,10 @@ class KmsOut:
             else np.stack([(v & 0xFF).astype(np.uint8), (v >> 8).astype(np.uint8)], -1)
 
     def blit(self, rgb):
-        """Write a frame to the framebuffer's top-left. Clips to the fb if oversized."""
+        """Write a frame to the framebuffer's top-left. Clips to the fb if oversized.
+        With vsync, blocks until the next vertical blank first (tear-free, ~60 Hz)."""
+        if self._vbl is not None:
+            self._vbl.wait()
         h = min(rgb.shape[0], self.fb_h)
         w = min(rgb.shape[1], self.fb_w)
         fb = self._to_fb(np.ascontiguousarray(rgb[:h, :w]))
@@ -87,6 +152,8 @@ class KmsOut:
     # calls blit() directly, but close() lets teardown be uniform.
     def close(self):
         try:
+            if self._vbl is not None:
+                self._vbl.close()
             self._mm.close()
         finally:
             os.close(self._fd)
