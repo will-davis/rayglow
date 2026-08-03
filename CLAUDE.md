@@ -39,6 +39,12 @@ The pieces:
     vblank — the flip is the master clock, so the sender can't outrun or queue
     ahead of the wall (bounded at `--net-window` frames). `link.py` is the wire
     contract both ends import; `tools/link_check.py` locks it.
+  - `rayglow/userconf.py` — per-machine CLI defaults for `rayglow.render` and
+    `rayglow.framesink` from `$RAYGLOW_CONFIG` / `./rayglow.toml` (gitignored) /
+    `~/.config/rayglow/config.toml`; keys = long flag names, CLI always wins.
+    `rayglow.example.toml` documents every key. Lives OUTSIDE the synced tree
+    on purpose: the mutagen-mirrored repo is identical on every machine, so
+    machine roles (server=net, Pi=kms+framesink) can't be encoded in it.
   - `rayglow/spi_test.py` — static test pattern over the SPI fallback (no GL) to
     isolate link/firmware; `tools/pio_ramp.py` is the parallel-bus equivalent for
     byte order.

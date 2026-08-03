@@ -30,7 +30,7 @@ import time
 
 import numpy as np
 
-from . import link
+from . import link, userconf
 from .feed import config
 
 
@@ -148,7 +148,12 @@ def main():
                     help="requested SO_RCVBUF in bytes (default 4 MiB; the "
                          "kernel clamps to net.core.rmem_max — raise that "
                          "sysctl if the effective value prints smaller)")
+    # Per-machine defaults from rayglow.toml / ~/.config/rayglow/config.toml
+    # ([framesink] table) — explicit flags still win.
+    conf_path, conf_vals = userconf.apply(ap, "framesink")
     args = ap.parse_args()
+    if conf_vals:
+        print(userconf.describe(conf_path, "framesink", conf_vals))
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, args.rcvbuf)

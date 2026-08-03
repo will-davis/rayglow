@@ -75,6 +75,7 @@ import time
 import numpy as np
 
 from ..feed import config  # geometry/gamma source of truth (shared feed pkg)
+from .. import userconf
 
 from . import textures
 from .control import ControlServer, PlayerState
@@ -1045,7 +1046,12 @@ def main():
                          "NVIDIA; RAYGLOW_EGL_DEVICE picks the GPU index), or "
                          "'auto' (surfaceless then device; the default). "
                          "$RAYGLOW_EGL sets the same thing")
+    # Per-machine defaults from rayglow.toml / ~/.config/rayglow/config.toml
+    # ([render] table, keys = long flag names) — explicit flags still win.
+    conf_path, conf_vals = userconf.apply(ap, "render")
     args = ap.parse_args()
+    if conf_vals:
+        print(userconf.describe(conf_path, "render", conf_vals))
 
     # Geometry defaults to the full two-chain display (256x64).
     if args.width is None:

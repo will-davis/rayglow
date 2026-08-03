@@ -81,6 +81,7 @@ KiCad project, and fab Gerbers are in [`hardware/`](hardware/).
 | `rayglow/fake_sender.py` | music-free test harness; emits the same packet struct with synthesized features. |
 | `rayglow/link.py` | **remote render wire contract** — frame fragments out, flip credits back (UDP, latest-wins, credit-paced; see [REMOTE-RENDER-PLAN.md](REMOTE-RENDER-PLAN.md)). Shared by `render/net_out.py` (`--output net`) and `framesink`. |
 | `rayglow/framesink.py` | the Pi when rendering happens elsewhere: reassemble frames → `drm_out` page flip → credit per vblank. A socket and a memcpy — no GL stack. |
+| `rayglow.example.toml` | per-machine CLI defaults (`rayglow/userconf.py`): pin each machine's flags (`output`, `net-host`, `window`, …) in `~/.config/rayglow/config.toml` so production launches are just `python -m rayglow.render <shader>` / `python -m rayglow.framesink`. CLI flags always override. |
 | `rayglow/spi_test.py` | static test pattern (no GL) — isolates the link/firmware/cabling from the renderer. Per-panel ID markers confirm the serpentine fold; runs over either transport. |
 | `firmware/` | **RP2350b Rust firmware** — zero-CPU PIO+DMA HUB75 scan-out, brought up in verifiable phases. [firmware/README.md](firmware/README.md). |
 | `hardware/` | **custom HAT** — KiCad project, Gerbers, and the locked net/pinout spec. [hardware/README.md](hardware/README.md). |

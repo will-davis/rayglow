@@ -1,0 +1,94 @@
+# rayglow.example.toml — per-machine CLI defaults for the rayglow entry points.
+#
+# Copy this next to where you run from, or (better on a multi-machine rig)
+# to ~/.config/rayglow/config.toml, then keep only the keys you want:
+#
+#   cp rayglow.example.toml ~/.config/rayglow/config.toml
+#
+# Search order (first hit wins):
+#   1. $RAYGLOW_CONFIG                    explicit path, overrides everything
+#   2. ./rayglow.toml                     gitignored. NOTE: on a mutagen-synced
+#                                         rig this file would ship to EVERY
+#                                         machine — use the XDG path instead.
+#   3. ~/.config/rayglow/config.toml      the per-machine home (recommended)
+#
+# Precedence: built-in default  <  this file  <  explicit CLI flag.
+# Keys are the long flag names from --help ('-' and '_' both accepted).
+# Unknown keys warn and are skipped — a typo can never take down a wall run.
+# Any long flag works as a key; the tables below list the ones worth pinning.
+#
+# The production three-machine setup this enables:
+#   ubuntu-server:  python -m rayglow.render <shader>     (renders to the wall)
+#   rpi5:           python -m rayglow.framesink           (DPI frame sink)
+#   desktop:        python -m rayglow.render <shader> --dry-run   (unchanged)
+# plus `set -Ux RAYGLOW_HOST <render-host>` on the desktop, which points the
+# sender, rayglow-ctl, AND the nvim save-hook at the renderer in one go.
+
+
+# ---------------------------------------------------------------------------
+# [render] — python -m rayglow.render  (see --help for the full list)
+# ---------------------------------------------------------------------------
+[render]
+
+# Frame sink: "wall" (rp2350 pack+ship), "kms" (local DPI framebuffer for the
+# FPGA), "net" (remote render: ship RGB over UDP to a framesink machine).
+#output = "net"
+
+# --output net: the framesink machine and its port.
+#net-host = "192.168.1.14"
+#net-port = 5007
+
+# Frames in flight before blocking on flip credits. The sink's advertised
+# window wins when it sends one; latency is bounded at window x flip-period.
+#net-window = 2
+
+# Path MTU the UDP fragments are sized for. 1500 works everywhere; set 9000
+# only after `ping -M do -s 8972 <sink>` succeeds end to end.
+#net-mtu = 1500
+
+# EGL platform: "auto" (surfaceless then device), "surfaceless" (Mesa: Pi,
+# desktop dry-runs), "device" (EGL_EXT_platform_device — pin this on NVIDIA
+# render hosts so a stray Mesa/llvmpipe can never win the vendor race).
+#egl = "device"
+
+# Supersample factor (1..8). CLI/config here beats a shader's
+# `// rayglow: scale=N` directive, which beats config.DEFAULT_SCALE.
+#scale = 2
+
+# FPS cap. Omit for the mode default: 120 for wall/kms, uncapped for net
+# (the sink's flip credits are the clock there — a cap would fight them).
+#fps = 120
+
+# GPU->CPU readback: "auto", "dmabuf", "dmabuf-pipe", "glread", "legacy".
+#readback = "auto"
+
+# rp2350 link for --output wall: "pio" (4-lane parallel) or "spi" (fallback).
+#transport = "pio"
+
+# Control plane (TCP push/load/media commands). Booleans are real TOML bools.
+#no-control = false
+#control-port = 5006
+
+
+# ---------------------------------------------------------------------------
+# [framesink] — python -m rayglow.framesink  (the Pi, remote render)
+# ---------------------------------------------------------------------------
+[framesink]
+
+# Frames in flight the renderer may hold, advertised in every credit.
+# 1 = minimum latency (one flip period, ~8.3 ms; production on this rig),
+# 2 = one extra frame of slack for jittery networks.
+#window = 1
+
+# UDP bind address / port (must match the renderer's net-host/net-port).
+#host = "0.0.0.0"
+#port = 5007
+
+# "drm" drives the DPI CRTC (production); "null" is a hardware-free pacing
+# stub for link tests, ticking at `pace` Hz.
+#backend = "drm"
+#pace = 122.14
+
+# Requested SO_RCVBUF in bytes; the kernel clamps to net.core.rmem_max and
+# the startup line shows what you actually got.
+#rcvbuf = 4194304

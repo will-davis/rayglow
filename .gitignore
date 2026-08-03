@@ -14,6 +14,9 @@ venv/
 LOCAL-SETUP.md
 local.env
 .env
+# Per-machine CLI defaults (rayglow.example.toml is the tracked template;
+# prefer ~/.config/rayglow/config.toml on mutagen-synced machines)
+/rayglow.toml
 
 # Rust firmware / host-tool build artifacts
 target/
