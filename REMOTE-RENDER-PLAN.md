@@ -1,12 +1,13 @@
 # REMOTE-RENDER-PLAN
 
-> **Status: code built, awaiting deployment.** Written 2026-08-02 as a handoff for a
-> future session; implemented the same day on `feat/remote-render` — Phase 0 (EGL
-> device platform, verified on the desktop's NVIDIA stack) and the Phase 2 code
-> (`rayglow/link.py` ⇄ `--output net` ⇄ `rayglow.framesink`, locked by
-> `tools/link_check.py`, loopback-verified at 122.14 Hz). §11 is the as-built
-> bring-up runbook: ubuntu-server setup, then Phase 1/2 acceptance on the wall.
-> The repo gets zero gateware changes — see §3.
+> **Status: PRODUCTION — deployed and accepted on the wall 2026-08-03.** Written
+> 2026-08-02 as a handoff; implemented the same day (Phase 0 EGL device platform +
+> the Phase 2 frame link, locked by `tools/link_check.py`); deployed and accepted
+> the next — see the ✔ block in §11.4 for the numbers. Per-machine launch defaults
+> live in `~/.config/rayglow/config.toml` (`rayglow.example.toml`), so production
+> is `python -m rayglow.render <shader>` on the render host and
+> `python -m rayglow.framesink` on the Pi. The gateware got zero changes (§3);
+> INTERFACE-CONTRACT is v0.3 (host-agnostic, ratified after the fact).
 >
 > **Updated 2026-08-02 (same day, later):** the 120 Hz DPI upgrade this plan warned
 > against in §5.3 shipped independently and is confirmed clean on the wall (contract
@@ -490,6 +491,18 @@ Watch the renderer's stats line: `wait` big and steady ≈ healthy credit pacing
 **`age` must hug 8.2 ms and stay flat for 30 min** (the §5.5 bufferbloat accept);
 sink `skip/drop` ≈ 0 at steady state; EVN **D8 dark** (SW5=6). `--output kms` on the
 Pi stays the fallback and must keep working.
+
+**✔ ACCEPTED 2026-08-03, on the wall.** 31-min soak, 4080 → Pi (wired VLAN 10),
+sink `--window 1`: 371 stats windows, fps min=avg=120.2, **age min=max=8.30 ms —
+zero drift**, 0 stalls, 0 skips/drops, 1 missed vblank in ~223k frames. Phase 1
+accepted the same session (live sender → server, sync confirmed by ear); 4080 load
+negligible with Frigate co-resident. `--output kms` fallback re-proven afterwards
+(114.8 fps, render 6.5 ms — the Pi can't hold cadence on the reference card: §1 in
+one line). Notes: the real DPI vblank paces ~120.2 fps, not the nominal 122.14 —
+credits adapt by design, modeline worth a look someday; framesink and kms both run
+NON-root (video+render groups; sudo was only ever for GPIO); **window 1 is
+production** (halves age vs window 2, zero cost on this LAN); MTU 1500 in
+production — jumbo (§5.5) remains an un-needed optimization.
 
 ### 11.5 Deployment sync
 
