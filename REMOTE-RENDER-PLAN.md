@@ -1,8 +1,12 @@
 # REMOTE-RENDER-PLAN
 
-> **Status: tentative.** Written 2026-08-02 as a handoff for a future session. Nothing
-> here is built yet. Supersedes nothing; if adopted, the code lands in **`~/Projects/rayglow`**
-> (this repo gets zero gateware changes — see §3).
+> **Status: code built, awaiting deployment.** Written 2026-08-02 as a handoff for a
+> future session; implemented the same day on `feat/remote-render` — Phase 0 (EGL
+> device platform, verified on the desktop's NVIDIA stack) and the Phase 2 code
+> (`rayglow/link.py` ⇄ `--output net` ⇄ `rayglow.framesink`, locked by
+> `tools/link_check.py`, loopback-verified at 122.14 Hz). §11 is the as-built
+> bring-up runbook: ubuntu-server setup, then Phase 1/2 acceptance on the wall.
+> The repo gets zero gateware changes — see §3.
 >
 > **Updated 2026-08-02 (same day, later):** the 120 Hz DPI upgrade this plan warned
 > against in §5.3 shipped independently and is confirmed clean on the wall (contract
@@ -418,3 +422,92 @@ Three patterns here already exist and should be reused rather than reinvented:
   queueing them. Same idea, bigger payload.
 - **Additive flag-guarded transports** — `--transport spi` survived the PIO bus and
   `--output wall` survived `--output kms`. Same idea, third instance.
+
+## 11. As-built (2026-08-02, `feat/remote-render`) + bring-up runbook
+
+### 11.1 What was built, and where it deviates from the plan above
+
+| Piece | File(s) | Notes |
+|---|---|---|
+| Phase 0: NVIDIA headless EGL | `render/egl.py`, `--egl` / `$RAYGLOW_EGL` | `device` = EGL_EXT_platform_device (CUDA-capable > DRM node > rest; `$RAYGLOW_EGL_DEVICE` pins an index). `auto` keeps surfaceless first, so Pi/desktop behavior is untouched. |
+| Phase 2: wire contract | `rayglow/link.py` | 24 B fragment header with explicit byte offsets (MTU 1500/9000 senders interop), 32 B credits, RFC1982 seqs. |
+| Phase 2: render-host sink | `render/net_out.py`, `--output net --net-host <pi>` | Gamma/orientation exactly as `--output kms` (FPGA owns gamma). `--fps` defaults to uncapped here — credits are the clock. |
+| Phase 2: Pi sink | `rayglow/framesink.py` (`python -m rayglow.framesink`) | Reassemble → `drm_out` page flip → one credit per vblank. No GL on the import path. |
+| Contract lock | `tools/link_check.py` | Layout pins, lossy/shuffled/wrapping reassembly, pacing (the §5.5 trap, asserted), restart resyncs — loopback only. |
+
+Three findings that amend the plan:
+
+1. **§6 Phase 0's premise softened**: NVIDIA ≥435 implements
+   `EGL_MESA_platform_surfaceless` too (verified on the desktop's RTX PRO 6000,
+   driver 610), so `auto` may land on the GPU without help. `--egl device` stays the
+   pinned route for ubuntu-server: deterministic vendor + GPU selection regardless of
+   glvnd vendor order or a stray Mesa/llvmpipe install.
+2. **§5.5's "hold N credits" needed one refinement.** Settling credits by
+   highest-seq alone lets a fast renderer settle into a stable render-two-show-one
+   pattern (the skip settles both slots at once — 2× GPU/network for nothing, the
+   SW5=8 waste reinvented). As built, credits replenish send-tokens per page FLIP
+   (absolute counters, loss-healing), skips deliberately eat a token, reported drops
+   replenish. Loopback-measured: converges to exactly one send per flip after a
+   1-frame startup skip; `age` flat at one flip period.
+3. **Jumbo frames are opt-in** (`--net-mtu 9000`), default 1500 — ~102 datagrams/frame
+   works fine on loopback and same-switch GbE; flip to 9000 only after
+   `ping -M do -s 8972 <pi>` passes end to end (§8's silent-fragmentation risk).
+
+### 11.2 ubuntu-server one-time setup
+
+```
+# GL userspace: glvnd dispatch + NVIDIA's GL/GLES ICD (the driver metapackage may
+# already provide libnvidia-gl; headless/compute-only installs do not)
+sudo apt install libegl1 libgles2 libnvidia-gl-<driver-version>
+
+# clone lands via mutagen (11.5); editable install into the venv, same as the Pi:
+uv venv ~/venv && uv pip install --python ~/venv/bin/python -e ~/rayglow
+
+# Phase 0 accept — GL_RENDERER must say RTX 4080, "EGL device":
+cd ~/rayglow && RAYGLOW_EGL=device ~/venv/bin/python -m rayglow.render \
+    rayglow/render/presets/milk-verbose.glsl --dry-run 120 --no-listen
+```
+
+Ports in: UDP 5005 (feature feed), TCP 5006 (control plane). Out: UDP → Pi 5007.
+
+### 11.3 Pi framesink
+
+```
+sudo ~/venv/bin/python -m rayglow.framesink            # DRM master on the DPI CRTC
+# if the printed rcvbuf says "kernel clamped": sudo sysctl -w net.core.rmem_max=4194304
+```
+
+### 11.4 Run it (Phase 1+2 accept)
+
+```
+# desktop:        RAYGLOW_HOST=<ubuntu-server> sender/uv run sender.py
+# ubuntu-server:  RAYGLOW_EGL=device ~/venv/bin/python -m rayglow.render \
+#                     rayglow/render/presets/milk-verbose.glsl \
+#                     --output net --net-host <pi>
+```
+
+Watch the renderer's stats line: `wait` big and steady ≈ healthy credit pacing;
+**`age` must hug 8.2 ms and stay flat for 30 min** (the §5.5 bufferbloat accept);
+sink `skip/drop` ≈ 0 at steady state; EVN **D8 dark** (SW5=6). `--output kms` on the
+Pi stays the fallback and must keep working.
+
+### 11.5 Deployment sync
+
+Two new mutagen sessions, per §4's table (desktop stays the single source of
+truth). Flags mirror the existing `rayglow-code` session, plus `/.claude`
+(session worktrees don't belong on render targets — worth adding to
+`rayglow-code` too):
+
+```
+mutagen sync create --name=rayglow-render --mode=one-way-replica --ignore-vcs \
+    --ignore=/firmware/target --ignore=/.venv --ignore=/rayglow.egg-info \
+    --ignore='**/__pycache__' --ignore='**/*.pyc' --ignore='**/*.egg-info' \
+    --ignore=/.claude \
+    ~/Projects/rayglow ubuntu-server:/home/will/rayglow
+mutagen sync create --name=rayglow-shaders-render --mode=one-way-replica \
+    --ignore='*.swp' --ignore='*.swo' \
+    ~/Projects/rayglow-shaders ubuntu-server:/home/will/presets
+```
+
+The control plane moves with the renderer (open question §9.3 answered: yes —
+`rayglow-ctl -h <ubuntu-server> push ...`; nothing Pi-side ever depended on it).

@@ -31,6 +31,14 @@ The pieces:
     per-shader: `--scale` > a `// rayglow: scale=N` directive (`textures.parse_settings`)
     > `config.DEFAULT_SCALE`, live-adjustable via `rayglow-ctl scale`.
   - `rayglow/fake_sender.py` — music-free test harness, same packet struct.
+  - `rayglow/link.py` + `rayglow/framesink.py` — **remote render**
+    (REMOTE-RENDER-PLAN.md): the renderer runs on any GPU box (`--output net`,
+    `render/net_out.py` — NVIDIA headless via `--egl device`) and ships resolved
+    RGB frames over UDP to the Pi's `python -m rayglow.framesink`, which
+    reassembles latest-wins into `drm_out` page flips and returns one credit per
+    vblank — the flip is the master clock, so the sender can't outrun or queue
+    ahead of the wall (bounded at `--net-window` frames). `link.py` is the wire
+    contract both ends import; `tools/link_check.py` locks it.
   - `rayglow/spi_test.py` — static test pattern over the SPI fallback (no GL) to
     isolate link/firmware; `tools/pio_ramp.py` is the parallel-bus equivalent for
     byte order.
@@ -47,6 +55,8 @@ The pieces:
   its `--live` mode pretty-prints real packets for sine-tone band verification.
   `rayglow_ctl.py`: the control-plane client (`push`/`load`/media controls);
   `control_check.py` locks its wire contract; `nvim-rayglow.lua` is the save-hook.
+  `link_check.py`: locks the remote-render frame link (`rayglow/link.py` —
+  fragments, credits, pacing) over loopback, no hardware.
 - **`docs/design-history/`** — superseded design docs kept for provenance (MilkDrop
   reverse-engineering, the RP2350 PROJECT-PLAN, the build-history brain-dump).
 - **`ROADMAP.md`** — queued workstreams, one session's worth each (runtime brightness
@@ -147,6 +157,8 @@ values (and the mutagen session details) live in the gitignored `LOCAL-SETUP.md`
   tools/feed_check.py` (`--live` to watch real packets, e.g. under sine tones).
 - Control-plane wire contract (client ⇄ server framing, no hardware): `uv run
   tools/control_check.py`.
+- Remote-render frame link (fragments ⇄ credits, latest-wins, credit pacing —
+  loopback, no hardware): `uv run --with numpy tools/link_check.py`.
 - Serpentine fold + the geometry/SRAM contract (no hardware): `uv run --with numpy
   tools/fold_check.py` — also prints the `PANELS_IN_CHAIN` the firmware needs.
 - Beat tracker: `cd sender && uv run beat.py` → click-track lock table.
