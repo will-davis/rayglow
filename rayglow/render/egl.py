@@ -1,16 +1,24 @@
-"""ctypes bindings for headless EGL + OpenGL ES 3 on the Pi's V3D GPU.
+"""ctypes bindings for headless EGL + OpenGL ES 3.
 
-Only the ~30 functions this renderer needs.  The context is *surfaceless*
-(EGL_PLATFORM_SURFACELESS_MESA): no X, no GBM, no window — we render into an
-FBO and glReadPixels it back.  Originally brought up on a Pi 4B (V3D 4.2);
-now runs on the Pi 5 (V3D 7.1, Mesa, OpenGL ES 3.1) and any desktop Mesa EGL
-for dry-runs.
+Only the ~30 functions this renderer needs.  The context is headless: no X,
+no GBM, no window — we render into an FBO and read it back.  Two ways to get
+a display (GLContext picks at runtime, see its docstring):
+
+  surfaceless — EGL_PLATFORM_SURFACELESS_MESA, the original Mesa-only path.
+                Originally brought up on a Pi 4B (V3D 4.2); now runs on the
+                Pi 5 (V3D 7.1, Mesa, GLES 3.1) and any desktop Mesa EGL.
+  device      — EGL_EXT_platform_device: enumerate GPUs and take a display
+                straight off one.  The headless route on NVIDIA's proprietary
+                driver, which does not implement the Mesa platform
+                (remote render on ubuntu-server's RTX 4080).
 
 Every function gets explicit argtypes/restype — ctypes inference on 64-bit
 pointers is how you segfault.  Enum values are standard Khronos constants
 (the EGL ones were verified live before this module was written).
 """
 import ctypes
+import os
+import sys
 from ctypes import (POINTER, byref, c_char, c_char_p, c_float, c_int,
                     c_ssize_t, c_ubyte, c_uint, c_void_p)
 
@@ -21,12 +29,24 @@ _gl = ctypes.CDLL("libGLESv2.so.2", mode=ctypes.RTLD_GLOBAL)
 # EGL constants
 # ---------------------------------------------------------------------------
 EGL_PLATFORM_SURFACELESS_MESA = 0x31DD
+EGL_PLATFORM_DEVICE_EXT = 0x313F   # EGL_EXT_platform_device
+EGL_EXTENSIONS = 0x3055            # eglQueryDeviceStringEXT: device extensions
 EGL_OPENGL_ES_API = 0x30A0
 EGL_CONTEXT_CLIENT_VERSION = 0x3098
 EGL_NONE = 0x3038
 EGL_SUCCESS = 0x3000
 EGL_NO_SURFACE = None
 EGL_NO_CONFIG = None  # EGL_KHR_no_config_context
+
+# eglChooseConfig attributes — only used on the device path when the driver
+# lacks EGL_KHR_no_config_context (we still never create a surface).
+EGL_SURFACE_TYPE = 0x3033
+EGL_PBUFFER_BIT = 0x0001
+EGL_RENDERABLE_TYPE = 0x3040
+EGL_OPENGL_ES3_BIT = 0x0040
+EGL_RED_SIZE = 0x3024
+EGL_GREEN_SIZE = 0x3023
+EGL_BLUE_SIZE = 0x3022
 
 # ---------------------------------------------------------------------------
 # GL constants (Khronos GLES3 standard values)
@@ -106,6 +126,9 @@ eglGetPlatformDisplay = _bind(_egl, "eglGetPlatformDisplay", c_void_p,
                               [c_uint, c_void_p, c_void_p])
 eglInitialize = _bind(_egl, "eglInitialize", c_uint,
                       [c_void_p, POINTER(c_int), POINTER(c_int)])
+eglChooseConfig = _bind(_egl, "eglChooseConfig", c_uint,
+                        [c_void_p, POINTER(c_int), POINTER(c_void_p), c_int,
+                         POINTER(c_int)])
 eglBindAPI = _bind(_egl, "eglBindAPI", c_uint, [c_uint])
 eglCreateContext = _bind(_egl, "eglCreateContext", c_void_p,
                          [c_void_p, c_void_p, c_void_p, POINTER(c_int)])
@@ -297,24 +320,53 @@ def _info_log(get_iv, get_log, obj):
 
 
 class GLContext:
-    """Headless surfaceless EGL context, OpenGL ES 3, current on creation."""
+    """Headless EGL context, OpenGL ES 3, current on creation.
 
-    def __init__(self):
-        self.display = eglGetPlatformDisplay(
-            EGL_PLATFORM_SURFACELESS_MESA, None, None)
-        if not self.display:
-            raise GLError(f"eglGetPlatformDisplay failed "
-                          f"(0x{eglGetError():04X}) — is /dev/dri readable?")
-        major, minor = c_int(0), c_int(0)
-        if not eglInitialize(self.display, byref(major), byref(minor)):
-            raise GLError(f"eglInitialize failed (0x{eglGetError():04X})")
+    `platform` (default: $RAYGLOW_EGL, else "auto") picks how the display is
+    obtained:
+
+      surfaceless — EGL_PLATFORM_SURFACELESS_MESA: the original path,
+                    unchanged (Pi V3D wall runs, desktop Mesa dry-runs).
+      device      — EGL_EXT_platform_device: enumerate GPUs with
+                    eglQueryDevicesEXT and take a display off one directly.
+                    The only headless route on NVIDIA's proprietary driver.
+                    $RAYGLOW_EGL_DEVICE=N picks the device index when several
+                    enumerate (otherwise: CUDA-capable > DRM node > rest).
+      auto        — surfaceless first (bit-for-bit the old behavior where it
+                    works), then device.  Caveat: a box with BOTH Mesa and
+                    NVIDIA installed answers surfaceless with llvmpipe
+                    (software GL) rather than failing — force
+                    RAYGLOW_EGL=device / --egl device there (a warning
+                    prints when that happens).
+    """
+
+    def __init__(self, platform=None):
+        platform = platform or os.environ.get("RAYGLOW_EGL") or "auto"
+        if platform == "surfaceless":
+            self.display, self.platform = self._surfaceless_display(), platform
+        elif platform == "device":
+            self.display, self.platform = self._device_display(), platform
+        elif platform == "auto":
+            try:
+                self.display, self.platform = (self._surfaceless_display(),
+                                               "surfaceless")
+            except GLError:
+                self.display, self.platform = self._device_display(), "device"
+        else:
+            raise GLError(f"unknown EGL platform {platform!r} "
+                          "(auto | surfaceless | device)")
         if not eglBindAPI(EGL_OPENGL_ES_API):
             raise GLError(f"eglBindAPI failed (0x{eglGetError():04X})")
-        # Surfaceless has no surface configs; EGL_KHR_no_config_context lets
-        # us pass a NULL config (verified working on Mesa 25 / V3D).
+        # Headless has no surface; EGL_KHR_no_config_context lets us pass a
+        # NULL config (verified working on Mesa 25 / V3D).  A driver without
+        # it gets any GLES3 config instead — no surface is created either way
+        # (EGL_KHR_surfaceless_context).
         attribs = (c_int * 3)(EGL_CONTEXT_CLIENT_VERSION, 3, EGL_NONE)
         self.context = eglCreateContext(
             self.display, EGL_NO_CONFIG, None, attribs)
+        if not self.context:
+            self.context = eglCreateContext(
+                self.display, self._choose_config(self.display), None, attribs)
         if not self.context:
             raise GLError(f"eglCreateContext failed (0x{eglGetError():04X})")
         if not eglMakeCurrent(self.display, EGL_NO_SURFACE, EGL_NO_SURFACE,
@@ -326,13 +378,99 @@ class GLContext:
         glGenVertexArrays(1, byref(vao))
         glBindVertexArray(vao.value)
         check_gl("context init")
+        renderer = glGetString(GL_RENDERER) or b""
+        if self.platform == "surfaceless" and b"llvmpipe" in renderer:
+            print("warning: software GL (llvmpipe) — if this box has a real "
+                  "GPU behind the NVIDIA driver, run with --egl device (or "
+                  "RAYGLOW_EGL=device)", file=sys.stderr)
+
+    @staticmethod
+    def _surfaceless_display():
+        """The Mesa surfaceless platform, initialized."""
+        display = eglGetPlatformDisplay(
+            EGL_PLATFORM_SURFACELESS_MESA, None, None)
+        if not display:
+            raise GLError(f"eglGetPlatformDisplay failed "
+                          f"(0x{eglGetError():04X}) — is /dev/dri readable?")
+        major, minor = c_int(0), c_int(0)
+        if not eglInitialize(display, byref(major), byref(minor)):
+            raise GLError(f"eglInitialize failed (0x{eglGetError():04X})")
+        return display
+
+    @staticmethod
+    def _device_display():
+        """EGL_EXT_platform_device, initialized on the best-ranked GPU.
+
+        Extension entry points come from eglGetProcAddress, which needs no
+        display — that is what makes this bootstrappable.
+        """
+        query_devices = load_ext(
+            "eglQueryDevicesEXT", c_uint,
+            [c_int, POINTER(c_void_p), POINTER(c_int)])
+        get_platform_display = load_ext(
+            "eglGetPlatformDisplayEXT", c_void_p,
+            [c_uint, c_void_p, POINTER(c_int)])
+        query_device_string = load_ext(
+            "eglQueryDeviceStringEXT", c_char_p, [c_void_p, c_int])
+
+        n = c_int(0)
+        if not query_devices(0, None, byref(n)) or n.value < 1:
+            raise GLError("EGL device platform: no devices enumerate")
+        devs = (c_void_p * n.value)()
+        query_devices(n.value, devs, byref(n))
+
+        def dev_exts(d):
+            s = query_device_string(d, EGL_EXTENSIONS)
+            return s.decode() if s else ""
+
+        pick = os.environ.get("RAYGLOW_EGL_DEVICE")
+        if pick is not None:
+            order = [int(pick)]
+        else:
+            # Hardware first: a CUDA-capable device (NVIDIA) over a plain DRM
+            # node over the rest (llvmpipe advertises neither).  Ties keep
+            # enumeration order.
+            def rank(i):
+                e = dev_exts(devs[i])
+                return (0 if "EGL_NV_device_cuda" in e
+                        else 1 if "EGL_EXT_device_drm" in e else 2, i)
+            order = sorted(range(n.value), key=rank)
+
+        err = EGL_SUCCESS
+        for i in order:
+            display = get_platform_display(
+                EGL_PLATFORM_DEVICE_EXT, devs[i], None)
+            if not display:
+                err = eglGetError()
+                continue
+            major, minor = c_int(0), c_int(0)
+            if eglInitialize(display, byref(major), byref(minor)):
+                return display
+            err = eglGetError()
+        raise GLError(f"EGL device platform: none of {n.value} device(s) "
+                      f"would initialize (last error 0x{err:04X})")
+
+    @staticmethod
+    def _choose_config(display):
+        """Any RGB888 GLES3 config — the no-config-context fallback."""
+        attrs = (c_int * 11)(EGL_SURFACE_TYPE, EGL_PBUFFER_BIT,
+                             EGL_RENDERABLE_TYPE, EGL_OPENGL_ES3_BIT,
+                             EGL_RED_SIZE, 8, EGL_GREEN_SIZE, 8,
+                             EGL_BLUE_SIZE, 8, EGL_NONE)
+        cfg, num = c_void_p(), c_int(0)
+        if (not eglChooseConfig(display, attrs, byref(cfg), 1, byref(num))
+                or num.value < 1):
+            raise GLError(f"eglChooseConfig found no GLES3 config "
+                          f"(0x{eglGetError():04X})")
+        return cfg
 
     def info(self):
         def s(enum):
             v = glGetString(enum)
             return v.decode() if v else "?"
         return (f"{s(GL_RENDERER)} | {s(GL_VERSION)} | "
-                f"GLSL {s(GL_SHADING_LANGUAGE_VERSION)}")
+                f"GLSL {s(GL_SHADING_LANGUAGE_VERSION)} | "
+                f"EGL {self.platform}")
 
     def destroy(self):
         if self.display:

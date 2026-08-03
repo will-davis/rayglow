@@ -921,6 +921,13 @@ def main():
                          "(see tools/rayglow_ctl.py)")
     ap.add_argument("--control-port", type=int, default=config.CONTROL_PORT,
                     help=f"control-plane TCP port (default {config.CONTROL_PORT})")
+    ap.add_argument("--egl", choices=("auto", "surfaceless", "device"),
+                    default=None,
+                    help="EGL platform: 'surfaceless' (Mesa, the Pi/desktop "
+                         "path), 'device' (EGL_EXT_platform_device — headless "
+                         "NVIDIA; RAYGLOW_EGL_DEVICE picks the GPU index), or "
+                         "'auto' (surfaceless then device; the default). "
+                         "$RAYGLOW_EGL sets the same thing")
     args = ap.parse_args()
 
     # Geometry defaults to the full two-chain display (256x64).
@@ -930,7 +937,7 @@ def main():
         args.height = config.WALL_HEIGHT
 
     try:
-        ctx = GLContext()
+        ctx = GLContext(args.egl)
     except GLError as e:
         print(f"GL init failed: {e}", file=sys.stderr)
         sys.exit(1)
