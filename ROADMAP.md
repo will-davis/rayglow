@@ -12,11 +12,24 @@ audio-feed v3 packet overhaul
 and the renderer **control plane**
 ([`docs/design-history/2026-07-14-control-plane.md`](docs/design-history/2026-07-14-control-plane.md),
 `render/control.py` + `tools/rayglow_ctl.py` — the mutagen-free push dev loop +
-media controls; supersedes the old §2 "now-playing" file-copy sketch).
+media controls; supersedes the old §2 "now-playing" file-copy sketch); and
+**remote render** ([REMOTE-RENDER-PLAN.md](REMOTE-RENDER-PLAN.md) §11 — GLSL on
+ubuntu-server's RTX 4080, `--output net` ⇄ `rayglow.framesink`, credit-paced by
+the Pi's DPI vblank; accepted on the wall 2026-08-03. Production display is the
+ECP5 translator over DPI; the RP2350 path is the documented fallback).
 
 ---
 
 ## 1. Runtime brightness — firmware control surface, no bit-depth cost
+
+> **Status 2026-08-03: PARKED — fallback-path only.** Production scan-out moved
+> to the ECP5 translator, whose hardware brightness knob (SW5, contract §2a)
+> covers the immediate need; this spare-nibble design applies only if the
+> RP2350 `--output wall` path is revived. The *runtime/content-adaptive* half
+> of the need survives and re-targets the DPI path — candidate design: a
+> side-band in the DPI frame's discarded rows (the driver sends 480 rows, the
+> FPGA captures 128 — rows 128+ are a free control channel). Tracked in the
+> rayglow-fpga ROADMAP (Phase 4).
 
 **Why:** at full drive the wall can light the room to the point of disorienting
 on flashy shaders; dimming in the shader/pixel data spends wire codes
@@ -88,18 +101,20 @@ Full analysis in
 - **`--scale` default** (`config.DEFAULT_SCALE`): resolve pass made supersampling
   cheap (no CPU cost); Will is running scale 1 on heavy shaders by hand. Now that
   per-shader `// rayglow: scale=` and a live `scale` control command exist (item
-  2), the config default matters less — decide it after more wall time,
-  especially once the bigger v2 wall (item 5) sets the GPU budget.
+  2), the config default matters less — and remote render (2026-08-03) mooted
+  the GPU budget entirely: the question is now "what does the *wall* reward"
+  (panel pitch, BCM depth), answered empirically as Phase-4 headroom
+  exploration on the 4080. Only a budget question again if Pi-local render
+  returns.
 - **UBO uniforms** (item 5's other half) — modest; only if profiling ever shows
   uniform upload mattering again.
 - **Single-chain fold vectorization** (item 9) — only matters if a single-chain
   rig grows.
 - **GPU pack pass** (bit-plane extraction as a fragment shader, readback = the
-  wire stream) — the prep that makes the next wall cheap on the Pi side. Worth
-  more than it was: the v2 wall CPU-packs a 192 KB frame from 3× the pixels every
-  frame. (The old note here assumed the big wall needed **two RP2350s**; it does
-  not — one chip drives all 24 tiles at 75% SRAM and the measured ceiling is 30
-  panels. See item 5.)
+  wire stream) — **PARKED 2026-08-03**: the production path has no pack stage at
+  all (the FPGA owns fold + gamma + BCM; frames leave the renderer as plain
+  RGB). Applies only to the RP2350 `--output wall` fallback, where it remains
+  the right optimization if that path is ever load-bearing again.
 
 ## 4. Feed-v3 tuning backlog (small, wall-time driven)
 
@@ -114,7 +129,21 @@ shows problems:
 - Beat tracker on real music: octave locks (conf dips on relock), re-tempo
   ramp continuity on the milk-features card.
 
-## 5. Wall v2 — 384×128 bring-up (host + firmware shipped, wall unbuilt)
+## 5. Wall v2 — SHIPPED as-built (2026-07-29…08-03), via the FPGA translator
+
+**The wall is live**: 24 P4 tiles, 384×128, driven as **four** 6-panel chains by
+the ECP5 translator over DPI (rayglow-fpga; 122.14 Hz source, 171.2 Hz scan at
+SW5=6), rendered remotely on ubuntu-server (REMOTE-RENDER-PLAN.md §11). The
+RP2350 two-chain plan this section originally described was **bypassed, not
+built**: everything below the fold is kept for the record, but note honestly —
+**12-deep chain SI was never validated**, so the `--output wall` fallback for
+THIS wall is theoretical until someone runs the staged bring-up (6×2 first,
+`fold_check.py`, `spi_test`). The one-chip SRAM analysis (12/chain = 75%,
+ceiling 30 panels) stands. Firmware small win still open: zero-init `delays[]`
+(.data→.bss) → ~14 KB image, faster flash-iterate.
+
+<details>
+<summary>Original RP2350 two-chain bring-up plan (superseded 2026-08-03)</summary>
 
 The next physical wall, ~80% assembled as of 2026-07-16. **The transport question
 is settled: ONE RP2350b drives all 24 tiles on two chains.** Host + firmware
@@ -183,3 +212,5 @@ non-zero `delays[]` const-init in `DisplayMemory::new` drags the whole struct
 into flash, so the image is ~406 KB and boot memcpy's 384 KB. Zero-init `delays`
 and fill it at runtime in `Display::new` (`set_oe_gain` already overwrites it
 immediately) ⇒ ~14 KB image, much faster flash-iterate on the bench.
+
+</details>
