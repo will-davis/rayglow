@@ -554,6 +554,7 @@
       "netlist": "../rp2350-hub75-hat.net",
       "plot": "",
       "specctra_dsn": "rp2350-rgb-pcb-backups/rp2350-rgb-pcb.dsn",
+      "step": "",
       "vrml": ""
     },
     "page_layout_descr_file": ""
