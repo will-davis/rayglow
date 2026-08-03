@@ -151,6 +151,13 @@ UDP_PORT = 5005                 # add a firewall rule if the feed crosses VLANs/
 # "127.0.0.1" and reach it over an ssh tunnel.
 CONTROL_HOST = "0.0.0.0"
 CONTROL_PORT = 5006
+
+# Remote render (REMOTE-RENDER-PLAN.md): the rendered-frame link. A renderer
+# running elsewhere (--output net, render/net_out.py) fragments each RGB frame
+# over UDP to the Pi's framesink (rayglow/framesink.py), which answers one
+# credit datagram per DPI page flip — wire contract in rayglow/link.py,
+# locked by tools/link_check.py.
+FRAME_PORT = 5007
 # Scratch dir the "push" command writes to (the tmp file that holds what's
 # running). Kept out of the mutagen-synced tree so a push never fights the sync.
 LIVE_DIR = "~/.cache/rayglow/live"
