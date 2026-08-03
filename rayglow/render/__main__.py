@@ -822,14 +822,107 @@ def run_kms(toy, watchers, feed, args, player, cmd_queue, use_pbo=False):
         out.close()
 
 
+def run_net(toy, watchers, feed, args, player, cmd_queue, use_pbo=False):
+    """Render here, display there: ship resolved RGB frames to a remote
+    framesink (`python -m rayglow.framesink` on the Pi) over UDP.
+
+    Same live loop as run_kms (control plane, --loop auto-advance, feed,
+    pausable per-shader clock) — the display hardware just sits behind one
+    switch hop.  NetOut.blit() blocks on the sink's flip credits, so the
+    Pi's DPI vblank paces this loop exactly as drm_out's flip-complete event
+    paces run_kms: same master clock, delivered by datagram (see
+    rayglow/link.py).  Resolve gamma is 1.0, identical to run_kms — the FPGA
+    owns gamma on the DPI path.
+
+    Stats: `wait` is the credit block — big is healthy, it is run_kms's flip
+    wait relocated.  `age` is send->displayed for credited frames, THE
+    bufferbloat tell (plan §5.5): it must hug the DPI period and stay flat
+    for hours; a climbing age means queueing crept in somewhere.
+    """
+    from .net_out import NetOut
+
+    out = NetOut(args.net_host, args.net_port, window=args.net_window,
+                 mtu=args.net_mtu, timeout=args.net_timeout)
+    print(f"output: {out.desc}")
+    # Warm the render path before pacing starts (mirrors run_kms's warm-up).
+    if feed:
+        feed.update(0.0, 1.0 / 60)
+    out.blit(toy.render(0.0, 1.0 / 60, 0))
+    pin_to_core(config.RENDER_CORE)
+
+    frame_interval = 1.0 / args.fps if args.fps > 0 else 0.0
+    t0 = time.perf_counter()
+    last = t0
+    fps_frames, fps_t = 0, t0
+    switch_t = t0
+    acc_render = 0.0
+    print("\n  fps  render    send    wait     age  inflight  sink skip/drop")
+    try:
+        while True:
+            now = time.perf_counter()
+            if args.duration and now - t0 >= args.duration:
+                break
+            prev_toy = toy
+            toy, watchers = drain_commands(cmd_queue, toy, watchers, feed,
+                                           player, args, use_pbo)
+            if toy is not prev_toy:
+                switch_t = now
+            if (player.loop_interval and not player.repeat and not player.paused
+                    and len(player.playlist) > 1
+                    and now - switch_t >= player.loop_interval):
+                switch_t = now
+                nt, nw, _err = _advance(toy, feed, player, args, use_pbo, +1)
+                if nt is not None:
+                    toy, watchers = nt, nw
+                    print(f"loop: now showing {player.display_name}")
+            maybe_reload(toy, watchers)
+            if feed:
+                feed.update(now - t0, now - last)
+            ta = time.perf_counter()
+            shader_dt = 0.0 if player.paused else now - last
+            buf = toy.render(player.shader_time, shader_dt, player.shader_frame)
+            if not player.paused:
+                player.shader_time += now - last
+                player.shader_frame += 1
+            tb = time.perf_counter()
+            out.blit(buf)             # credit wait + fragment + UDP send
+            acc_render += tb - ta
+            last = now
+            fps_frames += 1
+            if now - fps_t >= 5.0:
+                n = fps_frames
+                player.fps = n / (now - fps_t)
+                cred = out.ledger.last_credit or {}
+                age = (out.acc_age / out.n_age * 1e3) if out.n_age else 0.0
+                print(f"{n / (now - fps_t):5.1f} "
+                      f"{acc_render / n * 1e3:6.1f}ms "
+                      f"{out.acc_send / n * 1e3:6.2f}ms "
+                      f"{out.acc_wait / n * 1e3:6.1f}ms "
+                      f"{age:6.1f}ms "
+                      f"{out.ledger.inflight():8d}  "
+                      f"{cred.get('skipped', 0):5d}/{cred.get('dropped', 0)}"
+                      + (f"  ({out.stalls} stalls)" if out.stalls else ""))
+                fps_frames, fps_t = 0, now
+                acc_render = 0.0
+                out.stats_reset()
+            sleep = frame_interval - (time.perf_counter() - now)
+            if sleep > 0:
+                time.sleep(sleep)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        out.close()
+
+
 def main():
     ap = argparse.ArgumentParser(
         prog="shadertoy", description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("shader", help="path to a .glsl file with Shadertoy "
                     "mainImage() code, pasted unchanged")
-    ap.add_argument("--fps", type=float, default=120.0,
-                    help="target fps cap (default 120)")
+    ap.add_argument("--fps", type=float, default=None,
+                    help="target fps cap (default 120; --output net defaults "
+                         "to uncapped — the sink's flip credits pace it)")
     ap.add_argument("--scale", type=int, default=None,
                     help="supersample factor. Precedence: this flag > a shader's "
                          "`// rayglow: scale=N` directive > config.DEFAULT_SCALE "
@@ -852,11 +945,35 @@ def main():
                          "+1 frame latency). glread: force the fallback. "
                          "legacy: the original full-size glReadPixels + CPU "
                          "postprocess path")
-    ap.add_argument("--output", choices=("wall", "kms"), default="wall",
+    ap.add_argument("--output", choices=("wall", "kms", "net"), default="wall",
                     help="frame sink: 'wall' (default — fold/pack/ship to the rp2350b "
-                         "over --transport) or 'kms' (blit raw RGB to the Pi's DPI "
+                         "over --transport), 'kms' (blit raw RGB to the Pi's DPI "
                          "framebuffer for the ECP5 FPGA translator; FPGA owns gamma + "
-                         "HUB75 fold, so resolve gamma is forced to 1.0)")
+                         "HUB75 fold, so resolve gamma is forced to 1.0), or 'net' "
+                         "(remote render: ship raw RGB over UDP to `python -m "
+                         "rayglow.framesink` on the Pi, credit-paced by its page "
+                         "flips; gamma as 'kms')")
+    ap.add_argument("--net-host", default=None,
+                    help="(--output net) the framesink host (the Pi)")
+    ap.add_argument("--net-port", type=int, default=config.FRAME_PORT,
+                    help=f"(--output net) framesink UDP port "
+                         f"(default {config.FRAME_PORT})")
+    ap.add_argument("--net-window", type=int, default=2,
+                    help="(--output net) frames in flight before blocking on "
+                         "the sink's flip credits (default 2 = one frame of "
+                         "network slack; the sink's advertised window wins if "
+                         "it sends one). Latency is bounded at window x "
+                         "flip-period by construction")
+    ap.add_argument("--net-mtu", type=int, default=1500,
+                    help="(--output net) path MTU the fragments are sized for "
+                         "(default 1500 — works everywhere). Set 9000 once "
+                         "jumbo frames are verified end to end "
+                         "(ping -M do -s 8972 <pi>): 147 KB/frame becomes ~17 "
+                         "datagrams instead of ~102")
+    ap.add_argument("--net-timeout", type=float, default=1.0,
+                    help="(--output net) seconds without a credit before "
+                         "assuming the sink restarted and probing on "
+                         "(default 1.0)")
     ap.add_argument("--fbdev", default="/dev/fb0",
                     help="(--output kms, fbdev backend) framebuffer device to blit into. "
                          "The DPI fb may not be fb0 once vc4-kms-v3d adds an HDMI fb — pick "
@@ -921,6 +1038,13 @@ def main():
                          "(see tools/rayglow_ctl.py)")
     ap.add_argument("--control-port", type=int, default=config.CONTROL_PORT,
                     help=f"control-plane TCP port (default {config.CONTROL_PORT})")
+    ap.add_argument("--egl", choices=("auto", "surfaceless", "device"),
+                    default=None,
+                    help="EGL platform: 'surfaceless' (Mesa, the Pi/desktop "
+                         "path), 'device' (EGL_EXT_platform_device — headless "
+                         "NVIDIA; RAYGLOW_EGL_DEVICE picks the GPU index), or "
+                         "'auto' (surfaceless then device; the default). "
+                         "$RAYGLOW_EGL sets the same thing")
     args = ap.parse_args()
 
     # Geometry defaults to the full two-chain display (256x64).
@@ -930,7 +1054,7 @@ def main():
         args.height = config.WALL_HEIGHT
 
     try:
-        ctx = GLContext()
+        ctx = GLContext(args.egl)
     except GLError as e:
         print(f"GL init failed: {e}", file=sys.stderr)
         sys.exit(1)
@@ -940,6 +1064,12 @@ def main():
     # output.Readback); only ever for the live loop, never dry-run (the one-frame
     # shift/drop would skew the GIF). It belongs to the legacy readback path.
     dry = args.dry_run is not None
+    if args.output == "net" and not dry and not args.net_host:
+        ap.error("--output net needs --net-host (the framesink machine)")
+    # --fps: wall/kms keep the historical 120 cap; a net run is paced by the
+    # sink's flip credits, so a local cap would only fight the master clock.
+    if args.fps is None:
+        args.fps = 0.0 if (args.output == "net" and not dry) else 120.0
     use_pbo = (not dry) and args.pbo
     if args.pbo:
         args.readback = "legacy"
@@ -961,9 +1091,10 @@ def main():
     else:
         args.render_gamma = config.PACK_GAMMA
         args.resolve_flip = (config.FLIP_V, config.FLIP_H)
-    # KMS/DPI output: the FPGA applies gamma (its CIE LUT), so the host must NOT bake
-    # it in — send display-referred RGB. Orientation flips stay on the GPU as usual.
-    if args.output == "kms" and not dry:
+    # KMS/DPI output — local (kms) or remote (net): the FPGA applies gamma (its
+    # CIE LUT), so the host must NOT bake it in — send display-referred RGB.
+    # Orientation flips stay on the GPU as usual.
+    if args.output in ("kms", "net") and not dry:
         args.render_gamma = 1.0
     toy, watchers, _ = build_shader(args, use_pbo, args.shader, fatal=True,
                                     scale_override=args.scale)
@@ -1008,7 +1139,7 @@ def main():
                   f"{args.control_port}: {e}", file=sys.stderr)
 
     try:
-        loop = run_kms if args.output == "kms" else run_wall
+        loop = {"kms": run_kms, "net": run_net}.get(args.output, run_wall)
         loop(toy, watchers, feed, args, player, cmd_queue, use_pbo=use_pbo)
     finally:
         if server is not None:

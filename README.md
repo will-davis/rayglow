@@ -79,10 +79,12 @@ KiCad project, and fab Gerbers are in [`hardware/`](hardware/).
 | `rayglow/feed/` | the audio-feature feed: packet `receiver`, `FeatureState`, and the rig `config` (geometry/network/gamma). Shared, dependency-free. |
 | `rayglow/render/` | **the live renderer** — headless EGL + GLES3, multipass pipeline, iChannel textures (`audio`, `milk`, noise, images), hot reload, a TCP **control plane** (`control.py`: push/switch shaders + media controls), the GPU resolve pass + zero-copy dma-heap readback (`output.py`, `dmabuf.py`), the frame packer (`hub75.py`) + link backends (`spi_out.py`, `pio_out.py` / `piobridge/`), and `presets/*.glsl`. |
 | `rayglow/fake_sender.py` | music-free test harness; emits the same packet struct with synthesized features. |
+| `rayglow/link.py` | **remote render wire contract** — frame fragments out, flip credits back (UDP, latest-wins, credit-paced; see [REMOTE-RENDER-PLAN.md](REMOTE-RENDER-PLAN.md)). Shared by `render/net_out.py` (`--output net`) and `framesink`. |
+| `rayglow/framesink.py` | the Pi when rendering happens elsewhere: reassemble frames → `drm_out` page flip → credit per vblank. A socket and a memcpy — no GL stack. |
 | `rayglow/spi_test.py` | static test pattern (no GL) — isolates the link/firmware/cabling from the renderer. Per-panel ID markers confirm the serpentine fold; runs over either transport. |
 | `firmware/` | **RP2350b Rust firmware** — zero-CPU PIO+DMA HUB75 scan-out, brought up in verifiable phases. [firmware/README.md](firmware/README.md). |
 | `hardware/` | **custom HAT** — KiCad project, Gerbers, and the locked net/pinout spec. [hardware/README.md](hardware/README.md). |
-| `tools/` | `verify.py` — proves the Python packer (`render/hub75.py`) is byte-identical to the firmware via a Rust golden frame. `fold_check.py` — proves the serpentine fold + the geometry/SRAM contract from the desk. `dmabuf_probe.py` — the readback benchmark. |
+| `tools/` | `verify.py` — proves the Python packer (`render/hub75.py`) is byte-identical to the firmware via a Rust golden frame. `fold_check.py` — proves the serpentine fold + the geometry/SRAM contract from the desk. `link_check.py` — locks the remote-render frame link (fragments/credits/pacing) over loopback. `dmabuf_probe.py` — the readback benchmark. |
 | `ROADMAP.md` | queued workstreams — the living handoff doc between working sessions. |
 | `docs/design-history/` | the original project record (MilkDrop reverse-engineering, the RP2350 plan, the build-history brain-dump). Superseded by the docs above where they disagree. |
 
