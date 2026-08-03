@@ -43,13 +43,14 @@ const vec2 PANEL = vec2(256.0, 64.0);     // logical wall (config.WALL_WIDTH/HEI
 const float ATLAS = 512.0;                // atlas is 512x512 (common.scaleW/H)
 
 // --- SDF edge controls (distance-field units, 0.5 == the glyph edge) ---------
-const float FILL_EDGE = 0.50;   // threshold for the solid fill
-const float OUTLINE   = 0.34;   // lower threshold → outline extends outward
-const float SOFT      = 0.07;   // smoothstep half-width: bigger = softer/blurrier
+const float FILL_EDGE = 0.20;   // threshold for the solid fill
+const float OUTLINE   = 0.14;   // lower threshold → outline extends outward
+const float SOFT      = 0.17;   // smoothstep half-width: bigger = softer/blurrier
 
-const vec3 FILL_COL    = vec3(0.10, 0.95, 0.75);   // teal glyph body
+const vec3 FILL_COL    = vec3(0.00, 0.00, 0.00);   // teal glyph body
 const vec3 OUTLINE_COL = vec3(0.02, 0.05, 0.12);   // near-black halo
-const vec3 BG_COL      = vec3(0.0);
+const vec3 BG_COL      = vec3(0.1, 0.1, 0.1);
+
 
 // ============================================================================
 //  THE WHOLE FONT  —  copy this block, then edit STR[]/LEN to set the text
@@ -278,9 +279,8 @@ const int STR[7] = int[7](
     87    // W
 );
 
-// Sample the SDF for one glyph (gi = ASCII code - 32), at point `tp` in the
-// glyph's local atlas-pixel space (origin = top-left of its box, y downward).
-// Returns the distance value (0.5 == edge); 0 outside the box so it never draws.
+mat2 rot(float a) { float s = sin(a), c = cos(a); return mat2(c, -s, s, c); }
+
 float glyphDist(int gi, vec2 tp) {
     vec4 r = FONT_RECT[gi];
     if (tp.x < 0.0 || tp.y < 0.0 || tp.x > r.z || tp.y > r.w) return 0.0;
@@ -291,25 +291,25 @@ float glyphDist(int gi, vec2 tp) {
 }
 
 void mainImage(out vec4 O, in vec2 I) {
-    // Quantize to the real panel grid so the dry-run GIF matches the wall.
+
+    O = vec4(vec3(0.), 1.0);
+    vec3 col = vec3(0.);
+    float psin = sin(iTime) * 0.5 + 0.5; 
     vec2 px = floor(I / iResolution.xy * PANEL);
 
-    // --- Fit the whole word into the panel ----------------------------------
-    // Total advance width of the string in font pixels...
+    vec2 center = PANEL * 0.5;
+    px = (px - center) * rot(iTime * 2.1) + center;
+
     float textW = 0.0;
     for (int i = 0; i < LEN; i++) textW += FONT_META[STR[i] - 32].z;
-    // ...choose a uniform scale so it spans ~88% of the wall width, then center.
     float scale  = (PANEL.x * 0.88) / textW;
     float originX = (PANEL.x - textW * scale) * 0.5;     // left pen, in panel px
-    // Vertically center the LINE_H cell on the panel.
     float originY = (PANEL.y - LINE_H * scale) * 0.5;
 
-    // Map this panel pixel into font-pixel "text space" (y grows DOWNWARD,
-    // matching BMFont's top-down metrics — note the flip from panel y-up).
     float tx = (px.x - originX) / scale;
     float ty = (PANEL.y - 1.0 - px.y - originY) / scale;
 
-    // --- Walk the pen across the glyphs, accumulating the nearest field ------
+    vec3 texsmear = vec3(0.0);
     float dist = 0.0;
     float pen = 0.0;
     for (int i = 0; i < LEN; i++) {
@@ -320,19 +320,18 @@ void mainImage(out vec4 O, in vec2 I) {
         pen += FONT_META[gi].z;                       // advance to next glyph
     }
 
-    // --- Distance field → pixels --------------------------------------------
-    // smoothstep gives ~1px antialiasing for free; widen SOFT for a soft glow.
-    float fill    = smoothstep(FILL_EDGE - SOFT, FILL_EDGE + SOFT, dist);
-    float outline = smoothstep(OUTLINE  - SOFT, OUTLINE  + SOFT, dist);
-
-    // Bass pulse: shift the fill toward white on kicks (live audio only).
-    // v3 16x3 milk: env0 (~125ms) of band b2, the old legacy-bass envelope.
-    float bass = texelFetch(iChannel0, ivec2(2, 0), 0).y;
-    vec3 fillCol = mix(FILL_COL, vec3(1.0), clamp(bass - 0.6, 0.0, 0.6));
-
-    // Composite: background → outline halo → glyph fill.
-    vec3 col = mix(BG_COL, OUTLINE_COL, outline);
-    col = mix(col, fillCol, fill);
-
-    O = vec4(col, 1.0);
+    for (float k = 0.0; k < 10.0; k = k + 0.4) {
+	//px = (px - center) * rot(iTime * (2.1)) + center;
+	float fill    = smoothstep(FILL_EDGE - SOFT, FILL_EDGE + SOFT, dist);
+	float outline = smoothstep(OUTLINE  - SOFT, OUTLINE  + SOFT, dist);
+	texsmear += mix(vec3(fill), vec3(outline), fill);
+	O.rgb += texsmear;
+    } 
+    //vec3 col = mix(BG_COL, OUTLINE_COL, outline);
+    //col = mix(col, fillCol, outline);
+    //O.rgb =+ col;
+    //O.rgb =+ 
+    //outline = clamp(outline, 0.9, 1.0);
+    //vec4 temp = vec4(1.0 - vec3(outline), 1.0);
+    //O = vec4(col, 1.0);
 }
